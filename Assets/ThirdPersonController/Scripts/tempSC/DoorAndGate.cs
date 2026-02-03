@@ -18,7 +18,7 @@ namespace TheGlitch
 
             bool both = Left.IsCharged && Right.IsCharged;
 
-            Debug.Log($"[Gate] L={Left.IsCharged} R={Right.IsCharged} both={both} t={_bothT:F2}");
+       
 
             if (both) _bothT += Time.unscaledDeltaTime;   // ★ 用 unscaled 更直观
             else _bothT = 0f;

@@ -17,6 +17,7 @@ namespace TheGlitch
 
         [Header("Scan")]
         public LayerMask HackableMask;
+        public LayerMask EnvironmentMask;
         public float ScanRadius = 12f;
         public float RefreshInterval = 0.25f;
         public float AimDistance = 30f;
@@ -37,8 +38,10 @@ namespace TheGlitch
         public ScanScreenFX ScreenScanFX;
         public float ScanFXDelay = 0.35f;   // 和 ScanScreenFX.Duration 保持一致
         public GameObject ScanOverlay;
+        public ScanColliderWireframeFX WireframeFX;
 
         private bool _scanStarting;
+
 
 
 
@@ -205,6 +208,9 @@ namespace TheGlitch
         private void EnterNormal()
         {
             BulletTime.Set(false);
+            if (WireframeFX != null)
+                WireframeFX.EndScan();
+
             if (ScanOverlay != null)
                 ScanOverlay.SetActive(false);
 
@@ -244,6 +250,8 @@ namespace TheGlitch
 
             if (ScreenScanFX != null)
                 ScreenScanFX.Play();
+            if (WireframeFX != null)
+                WireframeFX.BeginScan(transform, ScanRadius, HackableMask, EnvironmentMask, ScreenScanFX, MainCamera);
 
             float t = 0f;
             while (t < ScanFXDelay)
