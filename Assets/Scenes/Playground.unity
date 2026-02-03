@@ -11536,7 +11536,7 @@ MonoBehaviour:
   m_PreserveMeshAssetOnDestroy: 0
   assetGuid: 
   m_Mesh: {fileID: 519947105}
-  m_VersionIndex: 5941
+  m_VersionIndex: 5944
   m_IsSelectable: 1
   m_SelectedFaces: 
   m_SelectedEdges: []
@@ -14766,6 +14766,10 @@ PrefabInstance:
       propertyPath: m_Name
       value: Box_350x250x300_Prefab (57)
       objectReference: {fileID: 0}
+    - target: {fileID: 2765075023489016845, guid: 687dbafc2b84b2846b9a4a7a7dae2a7e, type: 3}
+      propertyPath: m_StaticEditorFlags
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 3248315488105561783, guid: 687dbafc2b84b2846b9a4a7a7dae2a7e, type: 3}
       propertyPath: m_LocalPosition.x
       value: 5.9504743
@@ -15524,6 +15528,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 35494162}
     m_Modifications:
+    - target: {fileID: 1277700310800588604, guid: 9eb847ab97b24024588682c8601254cf, type: 3}
+      propertyPath: m_Enabled
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 7324705577624711914, guid: 9eb847ab97b24024588682c8601254cf, type: 3}
       propertyPath: m_LocalScale.x
       value: 1
@@ -18444,6 +18452,10 @@ PrefabInstance:
     - target: {fileID: 899428459418414007, guid: e5f4daf24146ee040b5a2d7a73b30aa0, type: 3}
       propertyPath: m_Name
       value: Box_100x100x100_Prefab (62)
+      objectReference: {fileID: 0}
+    - target: {fileID: 899428459418414007, guid: e5f4daf24146ee040b5a2d7a73b30aa0, type: 3}
+      propertyPath: m_StaticEditorFlags
+      value: 0
       objectReference: {fileID: 0}
     - target: {fileID: 4043535580645081189, guid: e5f4daf24146ee040b5a2d7a73b30aa0, type: 3}
       propertyPath: m_ProbeAnchor
@@ -27365,6 +27377,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 35494162}
     m_Modifications:
+    - target: {fileID: 1277700310800588604, guid: 9eb847ab97b24024588682c8601254cf, type: 3}
+      propertyPath: m_Enabled
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 7324705577624711914, guid: 9eb847ab97b24024588682c8601254cf, type: 3}
       propertyPath: m_LocalScale.x
       value: 1
@@ -29048,6 +29064,9 @@ PrefabInstance:
     - targetCorrespondingSourceObject: {fileID: 4416926081852918481, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
       insertIndex: -1
       addedObject: {fileID: 1762682274}
+    - targetCorrespondingSourceObject: {fileID: 4416926081852918481, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
+      insertIndex: -1
+      addedObject: {fileID: 1762682275}
   m_SourcePrefab: {fileID: 100100000, guid: 64dce48905ffd9b4293e595fa6941544, type: 3}
 --- !u!114 &1762682259 stripped
 MonoBehaviour:
@@ -29088,8 +29107,11 @@ MonoBehaviour:
   HackableMask:
     serializedVersion: 2
     m_Bits: 64
+  EnvironmentMask:
+    serializedVersion: 2
+    m_Bits: 1
   ScanRadius: 12
-  RefreshInterval: 0.25
+  RefreshInterval: 1
   AimDistance: 12
   PromptsParent: {fileID: 1751168607}
   PromptPrefab: {fileID: 3670358917336100887, guid: 34884fe52d3a70a4791cf7b0937041a0, type: 3}
@@ -29099,6 +29121,7 @@ MonoBehaviour:
   ScreenScanFX: {fileID: 1568774502}
   ScanFXDelay: 0.35
   ScanOverlay: {fileID: 447436727}
+  WireframeFX: {fileID: 1762682275}
   QChargeTime: 0.8
 --- !u!4 &1762682268 stripped
 Transform:
@@ -29138,6 +29161,52 @@ MonoBehaviour:
   HackFOV: 35
   FovLerpSpeed: 6
   DofLerpSpeed: 6
+--- !u!114 &1762682275
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1694558276}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 23992dd19ab075d449326ff3e4801864, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::TheGlitch.ScanColliderWireframeFX
+  DetectionRadius: 1000
+  WaveDuration: 20
+  WaveWidth: 5
+  FalloffRadiusExtra: 3
+  AcquireInterval: 0.15
+  MaxHackableTargets: 20
+  MaxEnvironmentTargets: 2000
+  MinEnvironmentSize: 1
+  PreferStaticEnvironment: 0
+  HackableMask:
+    serializedVersion: 2
+    m_Bits: 64
+  EnvironmentMask:
+    serializedVersion: 2
+    m_Bits: 1
+  WireframeMaterial: {fileID: 2100000, guid: 07315bcd2c9394a43997fe6497a49f45, type: 2}
+  BaseBlue: {r: 0.21960786, g: 0.21960786, b: 0.21960786, a: 1}
+  FlashWhite: {r: 1, g: 1, b: 1, a: 1}
+  BaseAlpha: 0.65
+  BaseWidth: 0.02
+  WidthGain: 0.03
+  NearPower: 1.2
+  HackableBrightnessMultiplier: 2
+  HackableWidthMultiplier: 0.5
+  OcclusionMask:
+    serializedVersion: 2
+    m_Bits: 1
+  OccludedDimFactor: 0.4
+  OcclusionCheckInterval: 0.15
+  EnvironmentInteriorDetailLevel: 1
+  MaxInteriorLinesPerBuilding: 18
+  MaxMeshEdges: 1200
+  MeshHardEdgeAngle: 35
+  MeshIncludeBoundaryEdges: 1
 --- !u!1 &1764214107
 GameObject:
   m_ObjectHideFlags: 0

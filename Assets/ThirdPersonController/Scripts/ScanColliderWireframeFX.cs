@@ -1,491 +1,927 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace TheGlitch
 {
+    /// <summary>
+    /// ScanColliderWireframeFX
+    /// - Unscaled-time radial pulse centered on player
+    /// - Band-pass rendering: visible only while wave band passes over target
+    /// - Frustum-based target set (in view), not limited by scan radius
+    /// - X-ray style: intended to be visible through walls (use a material/shader with ZTest Always)
+    /// - Occlusion dimming: still visible through walls, but dim when occluded
+    /// - Moving targets supported: bounds changes trigger a redraw so lines follow motion
+    /// </summary>
     public class ScanColliderWireframeFX : MonoBehaviour
     {
-        [Header("Detection Range")]
-        [Tooltip("物理检测半径：决定了能扫出多远的东西")]
-        public float DetectionRadius = 300f;
+        [Header("Wave (Unscaled Time)")]
+        [Tooltip("How far the wave can reach. This is NOT your gameplay scan radius; it's the visual/logic reach for frustum targets.")]
+        public float DetectionRadius = 900f;
 
-        [Header("Targets Limiter")]
-        public int MaxHackableTargets = 100;
-        public int MaxEnvironmentTargets = 800;
-        public float MinEnvironmentSize = 0.5f;
+        [Tooltip("Pulse duration in seconds (unscaled). Recommended 0.3 ~ 0.6.")]
+        public float WaveDuration = 0.45f;
+
+        [Tooltip("Wave band thickness (meters). Smaller = faster/narrower look.")]
+        public float WaveWidth = 1.6f;
+
+        [Tooltip("Extra distance used for distance falloff so far targets aren't instantly invisible.")]
+        public float FalloffRadiusExtra = 3f;
+
+        [Header("Acquisition")]
+        [Tooltip("How often we refresh candidate colliders (unscaled seconds).")]
+        public float AcquireInterval = 0.15f;
+
+        [Tooltip("Max hackable colliders to render per pulse.")]
+        public int MaxHackableTargets = 20;
+
+        [Tooltip("Max environment colliders to render per pulse.")]
+        public int MaxEnvironmentTargets = 12;
+
+        [Tooltip("Environment colliders smaller than this bounds-size magnitude will be ignored.")]
+        public float MinEnvironmentSize = 8f;
+
+        [Tooltip("If enabled, environment colliders must be marked Static.")]
+        public bool PreferStaticEnvironment = false;
+
+        [Header("Masks")]
+        public LayerMask HackableMask = ~0;
+        public LayerMask EnvironmentMask = ~0;
 
         [Header("Material")]
+        [Tooltip("Use an Unlit/Additive material. For true X-ray, use a shader that sets ZTest Always (or equivalent).")]
         public Material WireframeMaterial;
 
-        [Header("Colors")]
-        public Color BaseBlue = new Color(0.0f, 0.7f, 1f, 1f);
-        public Color HackableOrange = new Color(1f, 0.35f, 0.0f, 1f);
-        public Color WaveFrontColor = new Color(1f, 1f, 1f, 1f);
+        [Header("Visual")]
+        public Color BaseBlue = new Color(0.2f, 0.6f, 1f, 1f);
+        public Color FlashWhite = new Color(1f, 1f, 1f, 1f);
+        public float BaseAlpha = 0.65f;
+        public float BaseWidth = 0.02f;
+        public float WidthGain = 0.03f;
 
-        [Header("Wave Physics (The Pulse)")]
-        [Tooltip("波浪扩散速度 (米/秒)")]
-        public float WaveSpeed = 60f;
+        [Header("Distance & Boost")]
+        public float NearPower = 1.2f;
 
-        [Tooltip("波浪的厚度 (米)。环境物体只有处在这个厚度带里才会显示")]
-        public float WaveWidth = 25f;
+        [Header("Hackable Boost")]
+        public float HackableBrightnessMultiplier = 2.0f;
+        public float HackableWidthMultiplier = 1.5f;
 
-
-        [Header("Line Settings")]
-        [Range(0f, 1f)] public float MaxAlpha = 0.8f;
-        public float BaseWidth = 0.01f;
-        public float HackableWidthMultiplier = 2.0f;
-
-        [Header("Occlusion")]
+        [Header("Occlusion Dimming")]
         public LayerMask OcclusionMask = ~0;
-        public float OccludedDimFactor = 0.2f;
-        // ★★★ 修复：补回了漏掉的变量定义 ★★★
-        public float OcclusionCheckInterval = 0.2f;
+        [Range(0f, 1f)] public float OccludedDimFactor = 0.4f;
+        public float OcclusionCheckInterval = 0.12f;
 
-        // 内部状态
-        private Transform _playerTransform;
-        private Vector3 _scanOrigin;
-        private float _scanStartTime;
+        [Header("Building Interior (Environment Only)")]
+        [Tooltip("0 = bounds only, 1 = add some interior lines (Watch Dogs vibe).")]
+        [Range(0, 1)] public int EnvironmentInteriorDetailLevel = 1;
+
+        [Tooltip("Cap interior lines per environment target to avoid spaghetti.")]
+        public int MaxInteriorLinesPerBuilding = 18;
+
+        [Header("MeshCollider Wireframe (Watch Dogs Style)")]
+        [Tooltip("Max edges to draw per MeshCollider (prevents heavy meshes from exploding lines).")]
+        public int MaxMeshEdges = 1200;
+
+        [Tooltip("Only draw 'hard edges' above this angle (degrees). Higher = fewer lines / cleaner.")]
+        [Range(0f, 180f)]
+        public float MeshHardEdgeAngle = 35f;
+
+        [Tooltip("If true: always include boundary edges (edges used by only 1 triangle).")]
+        public bool MeshIncludeBoundaryEdges = true;
+
+        // --- runtime state ---
+        private Transform _player;
+        private Camera _cam;
         private bool _isScanning;
-        private LayerMask _hackableMask;
-        private LayerMask _environmentMask;
-        private Camera _mainCamera;
+        private float _scanStartUnscaled;
+        private float _nextAcquireUnscaled;
 
-        private readonly List<WireframeTarget> _activeTargets = new List<WireframeTarget>();
-        private readonly List<LineRendererPool> _linePool = new List<LineRendererPool>();
+        private Plane[] _frustumPlanes;
 
-        private class WireframeTarget
+        private readonly Dictionary<Collider, WireTarget> _targetsByCollider = new Dictionary<Collider, WireTarget>(128);
+        private readonly List<WireTarget> _targets = new List<WireTarget>(128);
+
+        private readonly List<LineSlot> _pool = new List<LineSlot>(256);
+
+        // Mesh edge cache (per mesh + settings) to avoid recomputation every pulse
+        private readonly Dictionary<Mesh, MeshEdgeCache> _meshEdgeCache = new Dictionary<Mesh, MeshEdgeCache>(64);
+
+        private class WireTarget
         {
-            public Collider Collider;
-            public Transform Trans;
-            public Vector3 CenterPoint;
+            public Collider Col;
             public bool IsHackable;
 
-            // 状态控制
-            public bool HasHit;
-            public float DistToOrigin;
+            public Bounds LastBounds;
 
-            public bool IsOccluded;
-            public float NextOcclusionCheck;
-            public List<int> LineIndices = new List<int>();
+            public bool Occluded;
+            public float NextOccCheckUnscaled;
+
+            public readonly List<int> LineIndices = new List<int>(32);
         }
 
-        private class LineRendererPool
+        private class LineSlot
         {
-            public GameObject GameObject;
-            public LineRenderer Renderer;
+            public GameObject Go;
+            public LineRenderer Lr;
             public bool InUse;
         }
 
-        public void BeginScan(Transform playerTransform, float scanRadius_Unused, LayerMask hackableMask, LayerMask environmentMask, ScanScreenFX screenFX, Camera mainCamera)
+        private struct MeshEdgeCache
         {
-            _playerTransform = playerTransform;
-            _scanOrigin = playerTransform.position; // 锁定中心
-            _scanStartTime = Time.time;
-
-            _hackableMask = hackableMask;
-            _environmentMask = environmentMask;
-            _mainCamera = mainCamera;
-            _isScanning = true;
-
-            AcquireTargets();
+            public float HardAngleDeg;
+            public bool IncludeBoundary;
+            public int MaxEdges;
+            public int[] EdgePairs; // packed pairs: v0,v1,v0,v1...
         }
 
+        /// <summary>
+        /// Start a single pulse. Call when pressing V.
+        /// </summary>
+        public void BeginScan(Transform player, Camera mainCamera)
+        {
+            _player = player;
+            _cam = mainCamera;
+
+            _isScanning = true;
+            _scanStartUnscaled = Time.unscaledTime;
+            _nextAcquireUnscaled = 0f;
+
+            ClearAll(); // ensure no stale lines remain
+            AcquireTargetsUnscaled(force: true);
+        }
+
+        /// <summary>
+        /// Stop immediately and clear all visuals (no lingering).
+        /// Call when leaving scan (V again) or when you want to cancel.
+        /// </summary>
         public void EndScan()
         {
             _isScanning = false;
-            // 立即清理所有目标和可视化
-            foreach (var t in _activeTargets) ReleaseTarget(t);
-            _activeTargets.Clear();
+            ClearAll();
         }
 
         private void Update()
         {
-            if (!_isScanning)
+            if (!_isScanning) return;
+            if (_player == null || _cam == null) { EndScan(); return; }
+
+            float now = Time.unscaledTime;
+            float t = Mathf.Clamp01((now - _scanStartUnscaled) / Mathf.Max(0.0001f, WaveDuration));
+            float waveRadius = Mathf.Lerp(0f, DetectionRadius, t);
+
+            // Acquire candidates periodically (unscaled)
+            if (now >= _nextAcquireUnscaled)
             {
-                // 非扫描状态：清理所有目标
-                if (_activeTargets.Count > 0)
+                _nextAcquireUnscaled = now + Mathf.Max(0.02f, AcquireInterval);
+                AcquireTargetsUnscaled(force: false);
+            }
+
+            _frustumPlanes = GeometryUtility.CalculateFrustumPlanes(_cam);
+
+            Vector3 origin = _player.position;
+            float falloffRadius = Mathf.Max(1f, DetectionRadius + FalloffRadiusExtra);
+
+            // Update all targets
+            for (int i = _targets.Count - 1; i >= 0; i--)
+            {
+                WireTarget tg = _targets[i];
+                if (tg.Col == null)
                 {
-                    foreach (var t in _activeTargets) ReleaseTarget(t);
-                    _activeTargets.Clear();
+                    RemoveTargetAt(i);
+                    continue;
                 }
+
+                Bounds b = tg.Col.bounds;
+
+                // Optional: only operate on objects in view
+                if (!GeometryUtility.TestPlanesAABB(_frustumPlanes, b))
+                {
+                    SetVisible(tg, false);
+                    continue;
+                }
+
+                float dist = Vector3.Distance(origin, b.center);
+
+                // Band-pass: visible only while wave band passes over it
+                float inner = waveRadius - WaveWidth;
+                bool inBand = (dist >= inner && dist <= waveRadius);
+
+                if (!inBand)
+                {
+                    SetVisible(tg, false);
+                    continue;
+                }
+
+                // Update occlusion periodically (unscaled)
+                if (now >= tg.NextOccCheckUnscaled)
+                {
+                    tg.NextOccCheckUnscaled = now + Mathf.Max(0.02f, OcclusionCheckInterval);
+                    tg.Occluded = ComputeOccluded(b.center, tg.Col);
+                }
+
+                // Rebuild geometry if bounds changed (moving objects / rotating OBB causes bounds to change too)
+                if (!BoundsApproximatelyEqual(tg.LastBounds, b))
+                {
+                    tg.LastBounds = b;
+                    RedrawTarget(tg);
+                }
+
+                // Bell-shaped band intensity (smooth in/out inside band)
+                float a = Mathf.InverseLerp(inner, waveRadius, dist); // 0..1
+                float s = Smooth01(a);
+                float band = 4f * s * (1f - s); // peak at 0.5
+
+                // Distance boost (closer = brighter/thicker)
+                float dist01 = Mathf.Clamp01(dist / falloffRadius);
+                float nearBoost = Mathf.Pow(1f - dist01, NearPower);
+
+                float occlMul = tg.Occluded ? OccludedDimFactor : 1f;
+
+                // Slight flash-to-white at wave front (fast/narrow pulse feel)
+                float front01 = Mathf.Clamp01((dist - inner) / Mathf.Max(0.0001f, WaveWidth)); // 0..1 (back->front)
+                float flash = Mathf.Pow(front01, 6f); // sharper near front
+                Color col = Color.Lerp(BaseBlue, FlashWhite, flash);
+
+                float alpha = BaseAlpha * band * nearBoost * occlMul;
+                float width = BaseWidth + nearBoost * WidthGain;
+
+                if (tg.IsHackable)
+                {
+                    alpha *= HackableBrightnessMultiplier;
+                    width *= HackableWidthMultiplier;
+                }
+
+                if (alpha < 0.01f)
+                {
+                    SetVisible(tg, false);
+                    continue;
+                }
+
+                col.a = alpha;
+                ApplyVisuals(tg, col, width);
+                SetVisible(tg, true);
+            }
+
+            // Auto-end pulse at completion (single pulse behavior)
+            if (t >= 1f)
+                EndScan();
+        }
+
+        // ---------------------------
+        // Acquisition
+        // ---------------------------
+
+        private void AcquireTargetsUnscaled(bool force)
+        {
+            if (_player == null || _cam == null) return;
+
+            Vector3 origin = _player.position;
+            _frustumPlanes = GeometryUtility.CalculateFrustumPlanes(_cam);
+
+            // Hackables (always)
+            int hackCount = 0;
+            Collider[] hacks = Physics.OverlapSphere(origin, DetectionRadius, HackableMask, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < hacks.Length && hackCount < MaxHackableTargets; i++)
+            {
+                Collider c = hacks[i];
+                if (c == null) continue;
+
+                Bounds b = c.bounds;
+                if (!GeometryUtility.TestPlanesAABB(_frustumPlanes, b)) continue;
+
+                if (TryAddTarget(c, isHackable: true))
+                    hackCount++;
+            }
+
+            // Environment (large buildings/walls only)
+            List<(Collider c, float d)> env = null;
+
+            Collider[] envCols = Physics.OverlapSphere(origin, DetectionRadius, EnvironmentMask, QueryTriggerInteraction.Ignore);
+            for (int i = 0; i < envCols.Length; i++)
+            {
+                Collider c = envCols[i];
+                if (c == null) continue;
+
+                // Skip if also hackable (hackable wins)
+                if (((1 << c.gameObject.layer) & HackableMask.value) != 0)
+                    continue;
+
+                Bounds b = c.bounds;
+
+                if (!GeometryUtility.TestPlanesAABB(_frustumPlanes, b)) continue;
+                if (PreferStaticEnvironment && !c.gameObject.isStatic) continue;
+                if (b.size.magnitude < MinEnvironmentSize) continue;
+
+                float d = Vector3.Distance(origin, b.center);
+                env ??= new List<(Collider, float)>(64);
+                env.Add((c, d));
+            }
+
+            if (env == null || env.Count == 0) return;
+
+            env.Sort((a, b) => a.d.CompareTo(b.d));
+
+            int envCount = 0;
+            for (int i = 0; i < env.Count && envCount < MaxEnvironmentTargets; i++)
+            {
+                if (TryAddTarget(env[i].c, isHackable: false))
+                    envCount++;
+            }
+        }
+
+        private bool TryAddTarget(Collider c, bool isHackable)
+        {
+            if (c == null) return false;
+
+            if (_targetsByCollider.TryGetValue(c, out var existing))
+            {
+                // If it was environment but now should be hackable, upgrade
+                if (isHackable && !existing.IsHackable)
+                {
+                    existing.IsHackable = true;
+                }
+                return false;
+            }
+
+            var tg = new WireTarget
+            {
+                Col = c,
+                IsHackable = isHackable,
+                LastBounds = c.bounds,
+                NextOccCheckUnscaled = Time.unscaledTime
+            };
+
+            _targetsByCollider.Add(c, tg);
+            _targets.Add(tg);
+
+            DrawTarget(tg);
+            SetVisible(tg, false); // only show when band passes
+
+            return true;
+        }
+
+        // ---------------------------
+        // Drawing / Pool
+        // ---------------------------
+
+        private void DrawTarget(WireTarget tg)
+        {
+            if (tg.Col == null) return;
+
+            // Prefer accurate collider-based wireframes so they don't look "skewed"
+            if (tg.Col is BoxCollider bc)
+            {
+                DrawBoxColliderOBB(tg, bc);
                 return;
             }
 
-            // 1. 计算波浪当前位置
-            float timeElapsed = Time.time - _scanStartTime;
-            float waveRadius = timeElapsed * WaveSpeed;
-
-            // 2. 构建视锥体平面（用于剔除视野外物体）
-            Plane[] frustumPlanes = GeometryUtility.CalculateFrustumPlanes(_mainCamera);
-
-            for (int i = _activeTargets.Count - 1; i >= 0; i--)
+            if (tg.Col is SphereCollider sc)
             {
-                var target = _activeTargets[i];
-                if (target.Collider == null)
-                {
-                    ReleaseTarget(target);
-                    _activeTargets.RemoveAt(i);
-                    continue;
-                }
-
-                // 3. 更新移动物体的位置和线段几何
-                Bounds currentBounds = target.Collider.bounds;
-                bool boundsChanged = Vector3.Distance(target.CenterPoint, currentBounds.center) > 0.01f;
-
-                if (boundsChanged)
-                {
-                    target.CenterPoint = currentBounds.center;
-                    ReleaseTarget(target); // 释放旧线段
-                    bool success = DrawWireframe(target); // 重新绘制
-                    if (!success)
-                    {
-                        _activeTargets.RemoveAt(i);
-                        continue;
-                    }
-                }
-
-                // 4. 计算当前距离（每帧更新，支持移动物体）
-                float dist = Vector3.Distance(_scanOrigin, target.CenterPoint);
-                target.DistToOrigin = dist;
-
-                // 5. 视锥剔除：不在视野内的物体不显示
-                if (!GeometryUtility.TestPlanesAABB(frustumPlanes, currentBounds))
-                {
-                    UpdateTargetVisuals(target, Color.clear, 0f);
-                    continue;
-                }
-
-                // 6. 核心逻辑：计算物体与波浪的关系
-                float distBehindWave = waveRadius - dist; // >0 表示波浪已经扫过去了
-
-                float finalAlpha = 0f;
-                float widthScale = 1f;
-                Color targetColor = BaseBlue;
-
-                // Case A: 波浪还没到
-                if (distBehindWave < 0)
-                {
-                    finalAlpha = 0f;
-                }
-                // Case B: 波浪正在经过 (Active Pulse) - 唯一可见区域
-                else if (distBehindWave >= 0 && distBehindWave < WaveWidth)
-                {
-                    target.HasHit = true;
-
-                    // 在波浪带中的位置 (0 = 波头, 1 = 波尾)
-                    float waveProgress = distBehindWave / WaveWidth;
-
-                    // 平滑衰减曲线：前半段快速上升，后半段缓慢下降
-                    float frontFade = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01((1f - waveProgress) * 2f));
-                    float backFade = Mathf.SmoothStep(1f, 0f, Mathf.Clamp01(waveProgress));
-                    finalAlpha = Mathf.Max(frontFade, backFade * 0.5f);
-
-                    // Color: 波头是白色高亮
-                    targetColor = target.IsHackable ? HackableOrange : BaseBlue;
-                    float colorBlend = Mathf.Pow(waveProgress, 0.7f);
-                    targetColor = Color.Lerp(WaveFrontColor, targetColor, colorBlend);
-
-                    // Width: 波头稍微粗一点
-                    widthScale = Mathf.Lerp(1.5f, 1.0f, waveProgress);
-                }
-                // Case C: 波浪已经过去 - 立刻消失（无论是否hackable）
-                else
-                {
-                    finalAlpha = 0f;
-                }
-
-                // 7. 应用遮挡剔除
-                if (finalAlpha > 0.01f)
-                {
-                    UpdateOcclusion(target);
-                    if (target.IsOccluded) finalAlpha *= OccludedDimFactor;
-                }
-
-                // 8. 最终应用
-                finalAlpha *= MaxAlpha;
-
-                if (target.IsHackable && finalAlpha > 0.001f)
-                {
-                    finalAlpha = Mathf.Min(1f, finalAlpha * 1.5f);
-                    widthScale *= HackableWidthMultiplier;
-                }
-
-                if (finalAlpha < 0.01f)
-                {
-                    targetColor = Color.clear;
-                }
-                else
-                {
-                    targetColor.a = finalAlpha;
-                }
-
-                UpdateTargetVisuals(target, targetColor, BaseWidth * widthScale);
+                DrawSphereCollider(tg, sc);
+                return;
             }
+
+            if (tg.Col is CapsuleCollider cc)
+            {
+                DrawCapsuleCollider(tg, cc);
+                return;
+            }
+
+            if (tg.Col is MeshCollider mc)
+            {
+                // Watch Dogs style: hard edges / boundary edges only (cleaner than full triangle wireframe)
+                DrawMeshColliderHardEdges(tg, mc);
+                return;
+            }
+
+            // Fallback: bounds-based
+            Bounds b = tg.Col.bounds;
+            if (tg.IsHackable)
+                DrawBoxBounds(tg, b);
+            else
+                DrawBuilding(tg, b);
         }
 
-
-        private void AcquireTargets()
+        private void RedrawTarget(WireTarget tg)
         {
-            Vector3 origin = _scanOrigin;
-
-            // 1. Hackables
-            var hackables = Physics.OverlapSphere(origin, DetectionRadius, _hackableMask, QueryTriggerInteraction.Ignore);
-            int hCount = 0;
-            foreach (var col in hackables)
-            {
-                if (hCount >= MaxHackableTargets) break;
-                CreateWireframeTarget(col, true);
-                hCount++;
-            }
-
-            // 2. Environment
-            var environment = Physics.OverlapSphere(origin, DetectionRadius, _environmentMask, QueryTriggerInteraction.Ignore);
-
-            System.Array.Sort(environment, (a, b) => {
-                float da = Vector3.SqrMagnitude(a.transform.position - origin);
-                float db = Vector3.SqrMagnitude(b.transform.position - origin);
-                return da.CompareTo(db);
-            });
-
-            int eCount = 0;
-            foreach (var col in environment)
-            {
-                if (eCount >= MaxEnvironmentTargets) break;
-                if (col.bounds.size.magnitude < MinEnvironmentSize) continue;
-                CreateWireframeTarget(col, false);
-                eCount++;
-            }
+            ReleaseLines(tg);
+            DrawTarget(tg);
+            SetVisible(tg, false);
         }
 
-        private void CreateWireframeTarget(Collider col, bool isHackable)
+        // --- BoxCollider: oriented box (no "bounds skew") ---
+        private void DrawBoxColliderOBB(WireTarget tg, BoxCollider bc)
         {
-            // 防止重复添加相同的 collider
-            foreach (var existing in _activeTargets)
-            {
-                if (existing.Collider == col) return;
-            }
+            Transform t = bc.transform;
 
-            var target = new WireframeTarget
+            Vector3 half = bc.size * 0.5f;
+            Vector3 cLocal = bc.center;
+
+            Vector3[] local =
             {
-                Collider = col,
-                Trans = col.transform,
-                CenterPoint = col.bounds.center,
-                IsHackable = isHackable,
-                HasHit = false,
-                DistToOrigin = Vector3.Distance(_scanOrigin, col.bounds.center),
-                IsOccluded = false,
-                NextOcclusionCheck = Time.time + Random.Range(0f, 0.2f)
+                cLocal + new Vector3(-half.x, -half.y, -half.z),
+                cLocal + new Vector3(+half.x, -half.y, -half.z),
+                cLocal + new Vector3(+half.x, -half.y, +half.z),
+                cLocal + new Vector3(-half.x, -half.y, +half.z),
+                cLocal + new Vector3(-half.x, +half.y, -half.z),
+                cLocal + new Vector3(+half.x, +half.y, -half.z),
+                cLocal + new Vector3(+half.x, +half.y, +half.z),
+                cLocal + new Vector3(-half.x, +half.y, +half.z),
             };
 
-            bool success = DrawWireframe(target);
-            if (success)
+            Vector3[] w = new Vector3[8];
+            for (int i = 0; i < 8; i++)
+                w[i] = t.TransformPoint(local[i]);
+
+            int[,] edges =
             {
-                UpdateTargetVisuals(target, Color.clear, 0f);
-                _activeTargets.Add(target);
+                {0,1},{1,2},{2,3},{3,0},
+                {4,5},{5,6},{6,7},{7,4},
+                {0,4},{1,5},{2,6},{3,7}
+            };
+
+            for (int i = 0; i < edges.GetLength(0); i++)
+                AddLine(tg, w[edges[i, 0]], w[edges[i, 1]]);
+        }
+
+        // --- SphereCollider: accurate center/radius with transform ---
+        private void DrawSphereCollider(WireTarget tg, SphereCollider sc)
+        {
+            Transform t = sc.transform;
+            Vector3 center = t.TransformPoint(sc.center);
+
+            // Radius uses the largest axis scale so it encloses nicely
+            Vector3 s = t.lossyScale;
+            float r = sc.radius * Mathf.Max(Mathf.Abs(s.x), Mathf.Max(Mathf.Abs(s.y), Mathf.Abs(s.z)));
+
+            const int segments = 18;
+            DrawRingWorld(tg, center, t.up, r, segments);
+            DrawRingWorld(tg, center, t.right, r, segments);
+            DrawRingWorld(tg, center, t.forward, r, segments);
+        }
+
+        // --- CapsuleCollider: support direction X/Y/Z and scale ---
+        private void DrawCapsuleCollider(WireTarget tg, CapsuleCollider cc)
+        {
+            Transform t = cc.transform;
+
+            // direction: 0=X, 1=Y, 2=Z
+            Vector3 axisLocal = cc.direction == 0 ? Vector3.right : (cc.direction == 1 ? Vector3.up : Vector3.forward);
+            Vector3 axisWorld = t.TransformDirection(axisLocal).normalized;
+
+            Vector3 s = t.lossyScale;
+            float radiusScale = cc.direction == 0 ? Mathf.Max(Mathf.Abs(s.y), Mathf.Abs(s.z))
+                              : cc.direction == 1 ? Mathf.Max(Mathf.Abs(s.x), Mathf.Abs(s.z))
+                              : Mathf.Max(Mathf.Abs(s.x), Mathf.Abs(s.y));
+            float radius = cc.radius * radiusScale;
+
+            float heightScale = cc.direction == 0 ? Mathf.Abs(s.x) : (cc.direction == 1 ? Mathf.Abs(s.y) : Mathf.Abs(s.z));
+            float height = Mathf.Max(cc.height * heightScale, radius * 2f);
+
+            Vector3 center = t.TransformPoint(cc.center);
+
+            float halfHeight = Mathf.Max(0f, height * 0.5f - radius);
+            Vector3 top = center + axisWorld * halfHeight;
+            Vector3 bot = center - axisWorld * halfHeight;
+
+            // ring basis perpendicular to axisWorld
+            Vector3 p1 = Vector3.Cross(axisWorld, Vector3.up);
+            if (p1.sqrMagnitude < 0.001f) p1 = Vector3.Cross(axisWorld, Vector3.right);
+            p1.Normalize();
+            Vector3 p2 = Vector3.Cross(axisWorld, p1).normalized;
+
+            const int segments = 16;
+            DrawRingWorldBasis(tg, top, p1, p2, radius, segments);
+            DrawRingWorldBasis(tg, bot, p1, p2, radius, segments);
+
+            for (int i = 0; i < 8; i++)
+            {
+                float ang = (i / 8f) * Mathf.PI * 2f;
+                Vector3 off = (Mathf.Cos(ang) * p1 + Mathf.Sin(ang) * p2) * radius;
+                AddLine(tg, top + off, bot + off);
             }
         }
 
-
-        private bool DrawWireframe(WireframeTarget target)
+        private void DrawRingWorld(WireTarget tg, Vector3 center, Vector3 axis, float radius, int segments)
         {
-            if (target.Collider is BoxCollider box) { DrawRotatedBox(target, box); return true; }
-            else if (target.Collider is SphereCollider sphere) { DrawRotatedSphere(target, sphere); return true; }
-            else if (target.Collider is CapsuleCollider capsule) { DrawRotatedCapsule(target, capsule); return true; }
+            Vector3 a = axis.normalized;
+            Vector3 p1 = Vector3.Cross(a, Vector3.up);
+            if (p1.sqrMagnitude < 0.001f) p1 = Vector3.Cross(a, Vector3.right);
+            p1.Normalize();
+            Vector3 p2 = Vector3.Cross(a, p1).normalized;
+            DrawRingWorldBasis(tg, center, p1, p2, radius, segments);
+        }
 
-            MeshFilter mf = target.Collider.GetComponent<MeshFilter>();
-            if (mf != null && mf.sharedMesh != null) { DrawMeshOBB(target, mf.sharedMesh); return true; }
+        private void DrawRingWorldBasis(WireTarget tg, Vector3 center, Vector3 p1, Vector3 p2, float radius, int segments)
+        {
+            Vector3 prev = center + (p1 * radius);
+            for (int i = 1; i <= segments; i++)
+            {
+                float ang = (i / (float)segments) * Mathf.PI * 2f;
+                Vector3 next = center + (Mathf.Cos(ang) * p1 + Mathf.Sin(ang) * p2) * radius;
+                AddLine(tg, prev, next);
+                prev = next;
+            }
+        }
 
-            if (target.Collider is MeshCollider) { DrawAABB(target, target.Collider.bounds); return true; }
+        // --- Bounds-based box fallback (kept from your original) ---
+        private void DrawBoxBounds(WireTarget tg, Bounds b)
+        {
+            Vector3 c = b.center;
+            Vector3 e = b.extents;
 
+            Vector3[] corners =
+            {
+                c + new Vector3(-e.x,-e.y,-e.z),
+                c + new Vector3(+e.x,-e.y,-e.z),
+                c + new Vector3(+e.x,-e.y,+e.z),
+                c + new Vector3(-e.x,-e.y,+e.z),
+                c + new Vector3(-e.x,+e.y,-e.z),
+                c + new Vector3(+e.x,+e.y,-e.z),
+                c + new Vector3(+e.x,+e.y,+e.z),
+                c + new Vector3(-e.x,+e.y,+e.z),
+            };
+
+            int[,] edges =
+            {
+                {0,1},{1,2},{2,3},{3,0},
+                {4,5},{5,6},{6,7},{7,4},
+                {0,4},{1,5},{2,6},{3,7}
+            };
+
+            for (int i = 0; i < edges.GetLength(0); i++)
+                AddLine(tg, corners[edges[i, 0]], corners[edges[i, 1]]);
+        }
+
+        // --- MeshCollider (Watch Dogs style): hard edges + boundary edges only ---
+        private void DrawMeshColliderHardEdges(WireTarget tg, MeshCollider mc)
+        {
+            Mesh m = mc.sharedMesh;
+            if (m == null)
+            {
+                // fallback
+                if (tg.IsHackable) DrawBoxBounds(tg, mc.bounds);
+                else DrawBuilding(tg, mc.bounds);
+                return;
+            }
+
+            int[] pairs = GetHardEdgePairsCached(m);
+            if (pairs == null || pairs.Length < 2)
+            {
+                if (tg.IsHackable) DrawBoxBounds(tg, mc.bounds);
+                else DrawBuilding(tg, mc.bounds);
+                return;
+            }
+
+            Vector3[] verts = m.vertices;
+            Transform t = mc.transform;
+
+            for (int i = 0; i < pairs.Length; i += 2)
+            {
+                int i0 = pairs[i];
+                int i1 = pairs[i + 1];
+                if ((uint)i0 >= (uint)verts.Length || (uint)i1 >= (uint)verts.Length) continue;
+
+                Vector3 p0 = t.TransformPoint(verts[i0]);
+                Vector3 p1 = t.TransformPoint(verts[i1]);
+                AddLine(tg, p0, p1);
+            }
+        }
+
+        private int[] GetHardEdgePairsCached(Mesh m)
+        {
+            if (m == null) return null;
+
+            if (_meshEdgeCache.TryGetValue(m, out var cache))
+            {
+                if (Mathf.Approximately(cache.HardAngleDeg, MeshHardEdgeAngle)
+                    && cache.IncludeBoundary == MeshIncludeBoundaryEdges
+                    && cache.MaxEdges == MaxMeshEdges
+                    && cache.EdgePairs != null)
+                {
+                    return cache.EdgePairs;
+                }
+            }
+
+            int[] pairs = BuildHardEdgePairs(m, MeshHardEdgeAngle, MeshIncludeBoundaryEdges, MaxMeshEdges);
+
+            _meshEdgeCache[m] = new MeshEdgeCache
+            {
+                HardAngleDeg = MeshHardEdgeAngle,
+                IncludeBoundary = MeshIncludeBoundaryEdges,
+                MaxEdges = MaxMeshEdges,
+                EdgePairs = pairs
+            };
+
+            return pairs;
+        }
+
+        private static int[] BuildHardEdgePairs(Mesh m, float hardAngleDeg, bool includeBoundaryEdges, int maxEdges)
+        {
+            int[] tris = m.triangles;
+            Vector3[] v = m.vertices;
+            if (tris == null || tris.Length < 3 || v == null || v.Length == 0) return null;
+
+            float cosThreshold = Mathf.Cos(hardAngleDeg * Mathf.Deg2Rad);
+
+            // edge key: (min<<32) | max
+            var edges = new Dictionary<ulong, EdgeAccum>(Mathf.Min(1024, tris.Length));
+
+            for (int i = 0; i < tris.Length; i += 3)
+            {
+                int a = tris[i];
+                int b = tris[i + 1];
+                int c = tris[i + 2];
+
+                // face normal in local space
+                Vector3 n = Vector3.Cross(v[b] - v[a], v[c] - v[a]);
+                float mag = n.magnitude;
+                if (mag > 1e-6f) n /= mag;
+                else n = Vector3.up;
+
+                AccumEdge(edges, a, b, n);
+                AccumEdge(edges, b, c, n);
+                AccumEdge(edges, c, a, n);
+            }
+
+            // pick edges
+            var picked = new List<int>(Mathf.Min(maxEdges * 2, edges.Count * 2));
+
+            foreach (var kv in edges)
+            {
+                EdgeAccum e = kv.Value;
+
+                bool keep = false;
+
+                if (e.FaceCount == 1)
+                {
+                    keep = includeBoundaryEdges;
+                }
+                else
+                {
+                    // compare averaged normals of the two sides (approx)
+                    // If dot is small => angle large => hard edge
+                    float d = Vector3.Dot(e.N0, e.N1);
+                    keep = d <= cosThreshold;
+                }
+
+                if (!keep) continue;
+
+                // decode key -> v0,v1
+                int v0 = (int)(kv.Key >> 32);
+                int v1 = (int)(kv.Key & 0xFFFFFFFF);
+
+                picked.Add(v0);
+                picked.Add(v1);
+
+                if (picked.Count >= maxEdges * 2)
+                    break;
+            }
+
+            return picked.Count > 0 ? picked.ToArray() : null;
+        }
+
+        private struct EdgeAccum
+        {
+            public int FaceCount;
+            public Vector3 N0;
+            public Vector3 N1;
+        }
+
+        private static void AccumEdge(Dictionary<ulong, EdgeAccum> edges, int i0, int i1, Vector3 n)
+        {
+            int min = i0 < i1 ? i0 : i1;
+            int max = i0 < i1 ? i1 : i0;
+            ulong key = ((ulong)(uint)min << 32) | (uint)max;
+
+            if (!edges.TryGetValue(key, out var e))
+            {
+                e.FaceCount = 1;
+                e.N0 = n;
+                e.N1 = n;
+                edges[key] = e;
+                return;
+            }
+
+            // store second face normal
+            if (e.FaceCount == 1)
+            {
+                e.FaceCount = 2;
+                e.N1 = n;
+            }
+            else
+            {
+                // more than 2 faces share an edge (non-manifold) - just blend a bit
+                e.N1 = (e.N1 + n).normalized;
+            }
+
+            edges[key] = e;
+        }
+
+        private void DrawBuilding(WireTarget tg, Bounds b)
+        {
+            // Always bounds box
+            DrawBoxBounds(tg, b);
+
+            if (EnvironmentInteriorDetailLevel <= 0) return;
+
+            Vector3 c = b.center;
+            Vector3 e = b.extents;
+
+            int linesAdded = 0;
+
+            // A few "floors"
+            int floorCount = Mathf.Clamp(Mathf.CeilToInt((e.y * 2f) / 4f), 1, 4);
+            for (int i = 1; i <= floorCount && linesAdded < MaxInteriorLinesPerBuilding; i++)
+            {
+                float t = i / (float)(floorCount + 1);
+                float y = c.y - e.y + (e.y * 2f * t);
+
+                Vector3 a = new Vector3(c.x - e.x, y, c.z - e.z);
+                Vector3 b1 = new Vector3(c.x + e.x, y, c.z - e.z);
+                Vector3 c1 = new Vector3(c.x + e.x, y, c.z + e.z);
+                Vector3 d = new Vector3(c.x - e.x, y, c.z + e.z);
+
+                AddLine(tg, a, b1); linesAdded++;
+                if (linesAdded >= MaxInteriorLinesPerBuilding) break;
+                AddLine(tg, d, c1); linesAdded++;
+            }
+
+            // A few vertical grid hints
+            int verticalCount = 2;
+            for (int i = 1; i <= verticalCount && linesAdded < MaxInteriorLinesPerBuilding; i++)
+            {
+                float tx = i / (float)(verticalCount + 1);
+                float x = c.x - e.x + (e.x * 2f * tx);
+
+                Vector3 p0 = new Vector3(x, c.y - e.y, c.z - e.z);
+                Vector3 p1 = new Vector3(x, c.y + e.y, c.z - e.z);
+                AddLine(tg, p0, p1); linesAdded++;
+                if (linesAdded >= MaxInteriorLinesPerBuilding) break;
+
+                Vector3 q0 = new Vector3(x, c.y - e.y, c.z + e.z);
+                Vector3 q1 = new Vector3(x, c.y + e.y, c.z + e.z);
+                AddLine(tg, q0, q1); linesAdded++;
+            }
+        }
+
+        private void AddLine(WireTarget tg, Vector3 start, Vector3 end)
+        {
+            int idx = GetLineSlot();
+            tg.LineIndices.Add(idx);
+
+            var slot = _pool[idx];
+            slot.InUse = true;
+
+            var lr = slot.Lr;
+            lr.positionCount = 2;
+            lr.SetPosition(0, start);
+            lr.SetPosition(1, end);
+
+            // default visuals (will be overridden when active)
+            lr.startWidth = BaseWidth;
+            lr.endWidth = BaseWidth;
+            lr.startColor = BaseBlue;
+            lr.endColor = BaseBlue;
+
+            slot.Go.SetActive(false);
+        }
+
+        private int GetLineSlot()
+        {
+            for (int i = 0; i < _pool.Count; i++)
+            {
+                if (!_pool[i].InUse)
+                    return i;
+            }
+
+            GameObject go = new GameObject("WireframeLine");
+            go.transform.SetParent(transform, false);
+
+            var lr = go.AddComponent<LineRenderer>();
+            lr.useWorldSpace = true;
+            lr.alignment = LineAlignment.View; // keep your current look (thin glowing scan feel)
+            lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            lr.receiveShadows = false;
+
+            if (WireframeMaterial != null)
+            {
+                lr.material = WireframeMaterial;
+            }
+            else
+            {
+                // fallback (not true x-ray). Replace with your additive ZTestAlways shader material for best results.
+                lr.material = new Material(Shader.Find("Unlit/Color"));
+            }
+
+            // Encourage drawing on top; true X-ray still needs a proper shader (ZTest Always).
+            lr.sortingOrder = 5000;
+            if (lr.material != null) lr.material.renderQueue = 5000;
+
+            _pool.Add(new LineSlot { Go = go, Lr = lr, InUse = true });
+            return _pool.Count - 1;
+        }
+
+        private void ApplyVisuals(WireTarget tg, Color color, float width)
+        {
+            for (int i = 0; i < tg.LineIndices.Count; i++)
+            {
+                int idx = tg.LineIndices[i];
+                if (idx < 0 || idx >= _pool.Count) continue;
+                var lr = _pool[idx].Lr;
+
+                lr.startColor = color;
+                lr.endColor = color;
+                lr.startWidth = width;
+                lr.endWidth = width;
+            }
+        }
+
+        private void SetVisible(WireTarget tg, bool visible)
+        {
+            for (int i = 0; i < tg.LineIndices.Count; i++)
+            {
+                int idx = tg.LineIndices[i];
+                if (idx < 0 || idx >= _pool.Count) continue;
+                _pool[idx].Go.SetActive(visible);
+            }
+        }
+
+        private void ReleaseLines(WireTarget tg)
+        {
+            for (int i = 0; i < tg.LineIndices.Count; i++)
+            {
+                int idx = tg.LineIndices[i];
+                if (idx < 0 || idx >= _pool.Count) continue;
+
+                _pool[idx].InUse = false;
+                _pool[idx].Go.SetActive(false);
+            }
+            tg.LineIndices.Clear();
+        }
+
+        private void RemoveTargetAt(int i)
+        {
+            WireTarget tg = _targets[i];
+            if (tg != null && tg.Col != null)
+                _targetsByCollider.Remove(tg.Col);
+
+            if (tg != null)
+                ReleaseLines(tg);
+
+            _targets.RemoveAt(i);
+        }
+
+        private void ClearAll()
+        {
+            for (int i = _targets.Count - 1; i >= 0; i--)
+            {
+                ReleaseLines(_targets[i]);
+            }
+            _targets.Clear();
+            _targetsByCollider.Clear();
+        }
+
+        private bool ComputeOccluded(Vector3 targetPoint, Collider targetCol)
+        {
+            if (_cam == null) return false;
+
+            Vector3 eye = _cam.transform.position;
+            Vector3 dir = targetPoint - eye;
+            float len = dir.magnitude;
+            if (len < 0.01f) return false;
+
+            dir /= len;
+
+            if (Physics.Raycast(eye, dir, out RaycastHit hit, len, OcclusionMask, QueryTriggerInteraction.Ignore))
+            {
+                return hit.collider != targetCol;
+            }
             return false;
         }
 
-        private void DrawRotatedBox(WireframeTarget target, BoxCollider box)
+        private static bool BoundsApproximatelyEqual(Bounds a, Bounds b)
         {
-            Transform t = target.Trans;
-            Vector3 c = box.center; Vector3 s = box.size * 0.5f;
-            Vector3[] pts = GetBoxCorners(c, s);
-            for (int i = 0; i < 8; i++) pts[i] = t.TransformPoint(pts[i]);
-            DrawBoxFromCorners(target, pts);
-            if (!target.IsHackable && box.size.y > 3f) DrawBuildingInterior(target, pts, 3);
+            const float eps = 0.0004f;
+            return (a.center - b.center).sqrMagnitude < eps && (a.extents - b.extents).sqrMagnitude < eps;
         }
 
-        private void DrawMeshOBB(WireframeTarget target, Mesh mesh)
+        private static float Smooth01(float x)
         {
-            Transform t = target.Trans;
-            Bounds b = mesh.bounds;
-            Vector3[] pts = GetBoxCorners(b.center, b.extents);
-            for (int i = 0; i < 8; i++) pts[i] = t.TransformPoint(pts[i]);
-            DrawBoxFromCorners(target, pts);
-        }
-
-        private void DrawAABB(WireframeTarget target, Bounds b)
-        {
-            DrawBoxFromCorners(target, GetBoxCornersWorld(b));
-        }
-
-        private Vector3[] GetBoxCorners(Vector3 c, Vector3 s)
-        {
-            return new Vector3[8] {
-                c + new Vector3(-s.x, -s.y, -s.z), c + new Vector3( s.x, -s.y, -s.z),
-                c + new Vector3( s.x, -s.y,  s.z), c + new Vector3(-s.x, -s.y,  s.z),
-                c + new Vector3(-s.x,  s.y, -s.z), c + new Vector3( s.x,  s.y, -s.z),
-                c + new Vector3( s.x,  s.y,  s.z), c + new Vector3(-s.x,  s.y,  s.z)
-            };
-        }
-
-        private Vector3[] GetBoxCornersWorld(Bounds b)
-        {
-            Vector3 c = b.center; Vector3 s = b.extents;
-            return new Vector3[8] {
-                c + new Vector3(-s.x, -s.y, -s.z), c + new Vector3( s.x, -s.y, -s.z),
-                c + new Vector3( s.x, -s.y,  s.z), c + new Vector3(-s.x, -s.y,  s.z),
-                c + new Vector3(-s.x,  s.y, -s.z), c + new Vector3( s.x,  s.y, -s.z),
-                c + new Vector3( s.x,  s.y,  s.z), c + new Vector3(-s.x,  s.y,  s.z)
-            };
-        }
-
-        private void DrawRotatedSphere(WireframeTarget target, SphereCollider sphere)
-        {
-            Transform t = target.Trans;
-            float r = sphere.radius * Mathf.Max(t.lossyScale.x, Mathf.Max(t.lossyScale.y, t.lossyScale.z));
-            Vector3 worldC = t.TransformPoint(sphere.center);
-            DrawCircle(target, worldC, t.up, t.right, r);
-            DrawCircle(target, worldC, t.right, t.forward, r);
-            DrawCircle(target, worldC, t.forward, t.up, r);
-        }
-
-        private void DrawRotatedCapsule(WireframeTarget target, CapsuleCollider cap)
-        {
-            Transform t = target.Trans;
-            float maxScale = Mathf.Max(t.lossyScale.x, Mathf.Max(t.lossyScale.y, t.lossyScale.z));
-            float r = cap.radius * maxScale; float h = cap.height * maxScale;
-            Vector3 worldUp = (cap.direction == 1) ? t.up : (cap.direction == 0 ? t.right : t.forward);
-            Vector3 worldC = t.TransformPoint(cap.center);
-            float cylinderHalfH = Mathf.Max(0, h * 0.5f - r);
-            Vector3 top = worldC + worldUp * cylinderHalfH;
-            Vector3 bottom = worldC - worldUp * cylinderHalfH;
-
-            Vector3 cross = Vector3.Cross(worldUp, Vector3.up);
-            if (cross.magnitude < 0.01f) cross = Vector3.Cross(worldUp, Vector3.right);
-            cross.Normalize();
-            Vector3 cross2 = Vector3.Cross(worldUp, cross).normalized;
-
-            AddLine(target, top + cross * r, bottom + cross * r);
-            AddLine(target, top - cross * r, bottom - cross * r);
-            AddLine(target, top + cross2 * r, bottom + cross2 * r);
-            AddLine(target, top - cross2 * r, bottom - cross2 * r);
-            DrawCircle(target, top, worldUp, cross, r);
-            DrawCircle(target, bottom, worldUp, cross, r);
-        }
-
-        private void DrawBoxFromCorners(WireframeTarget target, Vector3[] p)
-        {
-            AddLine(target, p[0], p[1]); AddLine(target, p[1], p[2]); AddLine(target, p[2], p[3]); AddLine(target, p[3], p[0]);
-            AddLine(target, p[4], p[5]); AddLine(target, p[5], p[6]); AddLine(target, p[6], p[7]); AddLine(target, p[7], p[4]);
-            AddLine(target, p[0], p[4]); AddLine(target, p[1], p[5]); AddLine(target, p[2], p[6]); AddLine(target, p[3], p[7]);
-        }
-
-        private void DrawBuildingInterior(WireframeTarget target, Vector3[] p, int cuts)
-        {
-            for (int i = 1; i <= cuts; i++)
-            {
-                float t = (float)i / (cuts + 1);
-                AddLine(target, Vector3.Lerp(p[0], p[4], t), Vector3.Lerp(p[1], p[5], t));
-                AddLine(target, Vector3.Lerp(p[1], p[5], t), Vector3.Lerp(p[2], p[6], t));
-                AddLine(target, Vector3.Lerp(p[2], p[6], t), Vector3.Lerp(p[3], p[7], t));
-                AddLine(target, Vector3.Lerp(p[3], p[7], t), Vector3.Lerp(p[0], p[4], t));
-            }
-        }
-
-        private void DrawCircle(WireframeTarget target, Vector3 center, Vector3 axis, Vector3 perp, float radius)
-        {
-            int segments = 12;
-            Vector3 lastP = center + perp.normalized * radius;
-            for (int i = 1; i <= segments; i++)
-            {
-                Quaternion q = Quaternion.AngleAxis(360f * (i / (float)segments), axis);
-                Vector3 currentP = center + (q * perp.normalized) * radius;
-                AddLine(target, lastP, currentP);
-                lastP = currentP;
-            }
-        }
-
-        private void AddLine(WireframeTarget target, Vector3 start, Vector3 end)
-        {
-            int index = GetLineFromPool();
-            target.LineIndices.Add(index);
-            var pool = _linePool[index];
-            pool.InUse = true;
-            pool.Renderer.positionCount = 2;
-            pool.Renderer.SetPosition(0, start);
-            pool.Renderer.SetPosition(1, end);
-            pool.GameObject.SetActive(true);
-        }
-
-        private int GetLineFromPool()
-        {
-            for (int i = 0; i < _linePool.Count; i++) if (!_linePool[i].InUse) return i;
-            var go = new GameObject("WireframeLine");
-            go.transform.SetParent(transform);
-            var lr = go.AddComponent<LineRenderer>();
-            lr.material = WireframeMaterial;
-            lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            lr.receiveShadows = false;
-            lr.useWorldSpace = true;
-            lr.numCapVertices = 0;
-            lr.alignment = LineAlignment.View;
-            _linePool.Add(new LineRendererPool { GameObject = go, Renderer = lr, InUse = true });
-            return _linePool.Count - 1;
-        }
-
-        private void UpdateTargetVisuals(WireframeTarget target, Color color, float width)
-        {
-            bool visible = color.a > 0.005f;
-            foreach (int index in target.LineIndices)
-            {
-                var pool = _linePool[index];
-                if (pool.GameObject.activeSelf != visible) pool.GameObject.SetActive(visible);
-                if (visible)
-                {
-                    pool.Renderer.startColor = color; pool.Renderer.endColor = color;
-                    pool.Renderer.startWidth = width; pool.Renderer.endWidth = width;
-                }
-            }
-        }
-
-        private void UpdateOcclusion(WireframeTarget target)
-        {
-            if (Time.time < target.NextOcclusionCheck) return;
-            // ★这里现在可以正常访问了
-            target.NextOcclusionCheck = Time.time + OcclusionCheckInterval;
-
-            if (_mainCamera == null) return;
-
-            Vector3 eye = _mainCamera.transform.position;
-            Vector3 dir = target.CenterPoint - eye;
-
-            if (Physics.Raycast(eye, dir.normalized, out RaycastHit hit, dir.magnitude, OcclusionMask, QueryTriggerInteraction.Ignore))
-            {
-                target.IsOccluded = (hit.collider != target.Collider);
-            }
-            else target.IsOccluded = false;
-        }
-
-        private void ReleaseTarget(WireframeTarget target)
-        {
-            foreach (int index in target.LineIndices)
-            {
-                _linePool[index].InUse = false;
-                _linePool[index].GameObject.SetActive(false);
-            }
-            target.LineIndices.Clear();
+            x = Mathf.Clamp01(x);
+            // cubic smoothstep
+            return x * x * (3f - 2f * x);
         }
 
         private void OnDestroy()
         {
-            foreach (var pool in _linePool) if (pool.GameObject) Destroy(pool.GameObject);
-            _linePool.Clear();
+            for (int i = 0; i < _pool.Count; i++)
+            {
+                if (_pool[i].Go != null)
+                    Destroy(_pool[i].Go);
+            }
+            _pool.Clear();
+            _meshEdgeCache.Clear();
         }
     }
 }
