@@ -28,7 +28,7 @@ namespace TheGlitch
         public Vector3 PromptWorldOffset = new Vector3(0, 2.0f, 0);
 
         [Header("Hack Panel")]
-      
+
         public HackWheelUI HackWheel;
 
         [Header("Camera FX")]
@@ -250,8 +250,8 @@ namespace TheGlitch
 
             if (ScreenScanFX != null)
                 ScreenScanFX.Play();
-            if (WireframeFX != null)
-                WireframeFX.BeginScan(transform, ScanRadius, HackableMask, EnvironmentMask, ScreenScanFX, MainCamera);
+            if (WireframeFX != null) WireframeFX.BeginScan(transform, MainCamera);
+
 
             float t = 0f;
             while (t < ScanFXDelay)
@@ -353,7 +353,7 @@ namespace TheGlitch
         {
             // ★ 记录当前 hack 的目标（给影子用）
             _hackTarget = target;
-            BulletTime.Set(true,0.2f);
+            BulletTime.Set(true, 0.2f);
             if (ScanOverlay != null)
                 ScanOverlay.SetActive(true);
 
@@ -392,7 +392,7 @@ namespace TheGlitch
 
 
 
-        
+
 
         private void ExitHackToNormal()
         {
@@ -407,6 +407,8 @@ namespace TheGlitch
             // ★ 打开 Hack 镜头效果
             if (HackCamFX != null)
                 HackCamFX.SetHack(false);
+            WireframeFX.EndScan();
+
             EnterNormal();
         }
 
