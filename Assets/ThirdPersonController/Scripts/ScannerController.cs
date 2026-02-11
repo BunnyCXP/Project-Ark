@@ -42,6 +42,7 @@ namespace TheGlitch
 
         private bool _scanStarting;
 
+        public static bool IsScanOrHackActive { get; private set; }
 
 
 
@@ -232,6 +233,8 @@ namespace TheGlitch
             // ★ 世界恢复彩色
             if (WorldFXController.Instance != null)
                 WorldFXController.Instance.SetNormal();
+            IsScanOrHackActive = false;
+
         }
 
 
@@ -325,6 +328,8 @@ namespace TheGlitch
             // Scan：黑白 + 中等噪点
             if (WorldFXController.Instance != null)
                 WorldFXController.Instance.SetScanMode();
+            IsScanOrHackActive = true;
+
         }
 
 
@@ -387,6 +392,8 @@ namespace TheGlitch
             // ★ 打开 Hack 镜头效果
             if (HackCamFX != null)
                 HackCamFX.SetHack(true);
+            IsScanOrHackActive = true;
+
 
         }
 
