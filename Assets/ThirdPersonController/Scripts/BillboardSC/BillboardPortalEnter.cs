@@ -23,9 +23,13 @@ namespace TheGlitch
         public GameObject PromptUI;
 
         public CameraTargetSmoother SmoothTarget;
+
         // --- 内部缓存 ---
         private List<MonoBehaviour> _cachedScripts = new List<MonoBehaviour>();
         private List<Renderer> _cachedRenderers = new List<Renderer>();
+        // 【新增】缓存碰撞体和动画器，彻底解决卡死和脚步声Bug
+        private List<Collider> _cachedColliders = new List<Collider>();
+        private List<Animator> _cachedAnimators = new List<Animator>();
 
         private bool _canEnter;
         private GameObject _spawnedAvatar;
@@ -42,6 +46,10 @@ namespace TheGlitch
             if (PlayerRoot != null)
             {
                 _cachedRenderers.AddRange(PlayerRoot.GetComponentsInChildren<Renderer>(true));
+                // 【新增】自动抓取所有碰撞体和动画器
+                _cachedColliders.AddRange(PlayerRoot.GetComponentsInChildren<Collider>(true));
+                _cachedAnimators.AddRange(PlayerRoot.GetComponentsInChildren<Animator>(true));
+
                 var allScripts = PlayerRoot.GetComponentsInChildren<MonoBehaviour>(true);
                 foreach (var s in allScripts)
                 {
@@ -94,22 +102,31 @@ namespace TheGlitch
             Debug.Log("进入 2D 模式...");
             if (PromptUI) PromptUI.SetActive(false);
 
-            // 1. 隐藏外部遮挡板
             if (AdSurfaceRoot != null) AdSurfaceRoot.SetActive(false);
-            else Debug.LogWarning("AdSurfaceRenderer 没拖！记得去 Inspector 里把 Quad 拖进去！");
 
-            // 2. 禁用 3D 玩家
+            // 【核心修复 1】强制重置动画状态，防止脚步声循环
+            foreach (var anim in _cachedAnimators)
+            {
+                if (anim)
+                {
+                    anim.SetFloat("Speed", 0f);
+                    anim.SetFloat("MotionSpeed", 0f);
+                    anim.enabled = false;
+                }
+            }
+
+            // 【核心修复 2】关闭所有 3D 碰撞体，防止空气墙卡住 2D 玩家
+            foreach (var c in _cachedColliders) if (c) c.enabled = false;
+
             foreach (var s in _cachedScripts) if (s) s.enabled = false;
             foreach (var r in _cachedRenderers) if (r) r.enabled = false;
 
-            // 3. 计算位置
             float startS = 0f;
             if (SceneRail != null && PlayerRoot != null)
             {
                 SceneRail.ClosestPoint(PlayerRoot.position, out startS);
             }
 
-            // 4. 生成 2D 替身
             _spawnedAvatar = Instantiate(Avatar2DPrefab, transform.position, Quaternion.identity);
 
             var ctrl = _spawnedAvatar.GetComponent<BillboardAvatarController2D>();
@@ -118,19 +135,13 @@ namespace TheGlitch
                 ctrl.InitOnRail(SceneRail, startS);
             }
 
-            // 5. 设置相机 (关键修改)
-            // 2. 修改 Enter2DMode 的最后部分
             if (VCam2D != null)
             {
                 VCam2D.Priority = VCamActivePriority;
 
-                // 如果有平滑替身，就用替身；否则还用原来的
                 if (SmoothTarget != null)
                 {
-                    // 告诉替身：“你的新主人是这个新生成的 2D 小人”
                     SmoothTarget.PlayerRoot = _spawnedAvatar.transform;
-
-                    // 相机盯着替身
                     VCam2D.Follow = SmoothTarget.transform;
                     VCam2D.LookAt = SmoothTarget.transform;
                 }
@@ -149,10 +160,8 @@ namespace TheGlitch
             Debug.Log("恢复 3D 模式...");
             _enterCooldown = 1.5f;
 
-            // 1. 恢复遮挡板
             if (AdSurfaceRoot != null) AdSurfaceRoot.SetActive(true);
 
-            // 2. 销毁替身
             if (_spawnedAvatar != null) Destroy(_spawnedAvatar);
             var leftovers = FindObjectsOfType<BillboardAvatarController2D>();
             foreach (var avatar in leftovers)
@@ -161,16 +170,17 @@ namespace TheGlitch
             }
             _spawnedAvatar = null;
 
-            // 3. 关闭相机
             if (VCam2D != null)
             {
                 VCam2D.Priority = -1;
                 VCam2D.gameObject.SetActive(false);
             }
 
-            // 4. 恢复 3D 玩家
+            // 【恢复修复】恢复 3D 玩家的动画器和碰撞体
             foreach (var r in _cachedRenderers) if (r) r.enabled = true;
             foreach (var s in _cachedScripts) if (s) s.enabled = true;
+            foreach (var c in _cachedColliders) if (c) c.enabled = true;
+            foreach (var anim in _cachedAnimators) if (anim) anim.enabled = true;
 
             if (PromptUI) PromptUI.SetActive(false);
         }
