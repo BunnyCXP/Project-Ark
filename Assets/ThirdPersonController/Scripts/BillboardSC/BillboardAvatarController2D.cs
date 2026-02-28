@@ -127,16 +127,43 @@ namespace TheGlitch
             TeleportTo(_spawnDistance, _spawnHeight);
         }
 
+        // 传送到指定距离和高度
         public void TeleportTo(float targetDistance, float targetHeight)
         {
             _currentRailDistance = Mathf.Clamp(targetDistance, EdgeMargin, Rail.TotalLength - EdgeMargin);
             Rail.Sample(_currentRailDistance, out Vector3 p, out Vector3 t);
 
+            // 1. 玩家瞬移
             _cc.enabled = false;
             transform.position = new Vector3(p.x, targetHeight, p.z);
-            _cc.enabled = true;
 
+            // 强行把朝向也转过去，防止落地瞬间转身
+            Vector3 forward = Vector3.Cross(t, Vector3.up);
+            if (forward.sqrMagnitude > 0.001f)
+            {
+                transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
+            }
+            _cc.enabled = true;
             _verticalVelocity = 0f;
+
+            // 2. 【修复渲染 Bug】强行重置平滑替身 (如果存在)
+            var smoother = Object.FindFirstObjectByType<CameraTargetSmoother>();
+            if (smoother != null)
+            {
+                smoother.transform.position = transform.position + smoother.HeightOffset;
+                smoother.transform.rotation = transform.rotation;
+            }
+
+            // 3. 【修复渲染 Bug】强行打断 Cinemachine 的平滑飞行，让它瞬间切镜
+            var allCams = Object.FindObjectsByType<Unity.Cinemachine.CinemachineCamera>(FindObjectsSortMode.None);
+            foreach (var cam in allCams)
+            {
+                if (cam.gameObject.activeInHierarchy)
+                {
+                    // 这句代码的意思是：上一帧的位置作废，不要做阻尼插值，直接把镜头拉过来！
+                    cam.PreviousStateIsValid = false;
+                }
+            }
         }
     }
 }
