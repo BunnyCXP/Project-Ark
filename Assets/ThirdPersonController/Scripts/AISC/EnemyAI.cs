@@ -15,10 +15,11 @@ namespace TheGlitch
             Stunned,
             Frozen,
             Rebel,
-            Dead
+            Dead,
+            Catching // 【新增】：正在处决/抓捕玩家中
         }
 
-        [Header("AI")]
+        [Header("AI Vision")]
         public Transform Player;
         public Transform[] PatrolPoints;
         public float PatrolSpeed = 2f;
@@ -27,6 +28,17 @@ namespace TheGlitch
         [Range(0, 180)] public float ViewAngle = 60f;
         public float LoseSightTime = 2f;
         public bool EnablePatrol = false;
+
+        // 【新增】视线遮挡遮罩，设置哪些层级算作墙壁（务必在编辑器里配置，不要勾选 Player）
+        public LayerMask ObstacleMask = ~0;
+        // 【新增】眼睛的高度，防止射线贴着地板发射导致误判
+        public float EyeHeight = 1.5f;
+
+        [Header("Catch Player (抓捕机制)")]
+        // 【新增】抓捕距离，小于这个距离算抓到
+        public float CatchDistance = 1.5f;
+        // 【新增】玩家被抓后重生的出生点
+        public Transform PlayerSpawnPoint;
 
         [Header("Hack Timers")]
         public float StunDuration = 2.0f;
@@ -51,7 +63,7 @@ namespace TheGlitch
         private void Awake()
         {
             _agent = GetComponent<NavMeshAgent>();
-            _agent.updateRotation = true;   // 让 Agent 自己转向
+            _agent.updateRotation = true;
             _agent.updateUpAxis = true;
 
             ApplyMoveTuning(PatrolSpeed);
@@ -108,7 +120,6 @@ namespace TheGlitch
             Transform target = PatrolPoints[_patrolIndex];
             SetDestinationSafe(target.position);
 
-            // 用 remainingDistance 判断是否到达
             if (!_agent.pathPending && _agent.remainingDistance <= Mathf.Max(_agent.stoppingDistance, 0.25f))
             {
                 _patrolIndex = (_patrolIndex + 1) % PatrolPoints.Length;
@@ -123,12 +134,67 @@ namespace TheGlitch
                 return;
             }
 
+            // 【新增】抓捕距离检测
+            float distToPlayer = Vector3.Distance(transform.position, Player.position);
+            if (distToPlayer <= CatchDistance)
+            {
+                CatchPlayer();
+                return;
+            }
+
             ApplyMoveTuning(ChaseSpeed);
             SetDestinationSafe(Player.position);
 
             if (Time.time - _lastSeePlayerTime > LoseSightTime)
             {
                 _state = State.Patrol;
+            }
+        }
+
+        // 【新增】抓到玩家后的处理逻辑
+        // 【修改后】电影级抓捕逻辑
+        private void CatchPlayer()
+        {
+            // 防止连续触发
+            if (_state == State.Catching) return;
+
+            _state = State.Catching;
+            StopAgent(); // AI 原地站住，不追了
+
+            Debug.Log("AI 抓到了玩家！开始黑屏过渡...");
+
+            // 呼叫全局黑屏管理器
+            if (ScreenFader.Instance != null)
+            {
+                // 在屏幕完全变黑的那一瞬间，执行传送
+                ScreenFader.Instance.DoFadeAndAction(() =>
+                {
+                    TeleportPlayer();
+
+                    // 传完之后，AI 继续回去巡逻
+                    _state = State.Patrol;
+                });
+            }
+            else
+            {
+                // 防呆设计：如果没配置黑屏，就直接硬传
+                TeleportPlayer();
+                _state = State.Patrol;
+            }
+        }
+
+        // 把实际的传送代码单独提出来
+        private void TeleportPlayer()
+        {
+            if (PlayerSpawnPoint != null && Player != null)
+            {
+                CharacterController cc = Player.GetComponent<CharacterController>();
+                if (cc != null) cc.enabled = false;
+
+                Player.position = PlayerSpawnPoint.position;
+                Player.rotation = PlayerSpawnPoint.rotation;
+
+                if (cc != null) cc.enabled = true;
             }
         }
 
@@ -183,18 +249,28 @@ namespace TheGlitch
             float angle = Vector3.Angle(fwd, toPlayer);
             if (angle <= ViewAngle * 0.5f)
             {
-                _state = State.Chase;
-                _lastSeePlayerTime = Time.time;
+                // 【核心修复】：增加射线检测，防止透视墙壁
+                // 抬高发射点到胸部/眼睛位置，避免贴地射线撞到小石块
+                Vector3 eyePosition = transform.position + Vector3.up * EyeHeight;
+                Vector3 targetPosition = Player.position + Vector3.up * EyeHeight;
+                Vector3 dirToTarget = (targetPosition - eyePosition).normalized;
+                float distToTarget = Vector3.Distance(eyePosition, targetPosition);
+
+                // 发射射线检测墙壁。如果没有撞到 ObstacleMask 设定的墙壁层，才算真正看到
+                if (!Physics.Raycast(eyePosition, dirToTarget, distToTarget, ObstacleMask))
+                {
+                    _state = State.Chase;
+                    _lastSeePlayerTime = Time.time;
+                }
             }
         }
+
+        // ... [这下方保留你原来的代码：ApplyMoveTuning, StopAgent, SetDestinationSafe, FindNearestEnemy, 以及 IHackable 相关实现] ...
 
         private void ApplyMoveTuning(float speed)
         {
             if (_agent == null) return;
             _agent.speed = speed;
-            // 你也可以按需调加速度/转向速度
-            // _agent.acceleration = 16f;
-            // _agent.angularSpeed = 540f;
         }
 
         private void StopAgent()
@@ -211,7 +287,6 @@ namespace TheGlitch
             if (_agent == null) return;
             if (!_agent.enabled) return;
 
-            // 从目标点附近找一个最近的 NavMesh 点，避免 SetDestination 失败
             if (NavMesh.SamplePosition(worldPos, out NavMeshHit hit, 2.0f, NavMesh.AllAreas))
             {
                 _agent.isStopped = false;
@@ -219,7 +294,6 @@ namespace TheGlitch
             }
             else
             {
-                // 找不到就先停住，避免疯狂抽搐
                 StopAgent();
             }
         }
