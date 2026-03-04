@@ -16,7 +16,7 @@ namespace TheGlitch
         public float Gravity = -30f;
 
         [Header("Bounds & Collision")]
-        public float EdgeMargin = 0.5f;
+        public float EdgeMargin = 1.5f;
 
         [Header("Visual")]
         public Transform VisualRoot;
