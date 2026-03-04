@@ -2,7 +2,6 @@
 using UnityEngine.InputSystem;
 using Unity.Cinemachine;
 
-
 public class CameraModeSwitcher : MonoBehaviour
 {
     public CinemachineVirtualCamera FollowCam;    // VCam_Player
@@ -32,7 +31,6 @@ public class CameraModeSwitcher : MonoBehaviour
         }
     }
 
-    // ✅ 新增：只同步“内部模式”，不改优先级
     public void SyncModeAsOverview()
     {
         _mode = Mode.Overview;
@@ -58,6 +56,25 @@ public class CameraModeSwitcher : MonoBehaviour
         else
         {
             FollowCam.Priority = 0;
+            OverviewCam.Priority = OverviewPriority;
+        }
+    }
+
+    // ✅ 【核心新增】：允许外部（比如传送门）把新的上帝视角相机塞进来！
+    public void SetNewOverviewCamera(CinemachineVirtualCamera newCam)
+    {
+        // 1. 如果旧相机还在，先把它降级关掉
+        if (OverviewCam != null)
+        {
+            OverviewCam.Priority = 0;
+        }
+
+        // 2. 换上新关卡的相机
+        OverviewCam = newCam;
+
+        // 3. 如果玩家此时正好处于上帝视角状态，立刻激活新相机！
+        if (_mode == Mode.Overview && OverviewCam != null)
+        {
             OverviewCam.Priority = OverviewPriority;
         }
     }
