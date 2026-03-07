@@ -927,11 +927,11 @@ PlayerSettings:
   captureStartupLogs: {}
   activeInputHandler: 1
   windowsGamepadBackendHint: 0
-  cloudProjectId: 0a024920-9555-427b-a8a6-c839ff3899e0
+  cloudProjectId: ""
   framebufferDepthMemorylessMode: 0
   qualitySettingsNames: []
   projectName: Project-Ark 2026-01-04_20-37-54
-  organizationId: wechat_os_qy0zonc_pida2ppe8fwgkzroc
+  organizationId: ""
   cloudEnabled: 0
   legacyClampBlendShapeWeights: 0
   hmiLoadingImage: {fileID: 0}

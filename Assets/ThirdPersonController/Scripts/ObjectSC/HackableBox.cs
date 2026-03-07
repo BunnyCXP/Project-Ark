@@ -16,6 +16,10 @@ namespace TheGlitch
         public float LowFrictionDrag = 0.1f;    // 更容易推
         public float NormalDrag = 1.5f;
 
+        [Header("Height Limit (新增高度限制)")]
+        public float MaxFloatHeight = 5f;       // 允许箱子最高飘多高
+        private float _startY;                  // 记录初始Y坐标
+
         private Rigidbody _rb;
 
         // defaults for undo
@@ -46,13 +50,11 @@ namespace TheGlitch
 
             Material mat = rend.material;
 
-            // 记录原色（兼容不同 shader）
             Color baseColor =
                 mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") :
                 mat.HasProperty("_Color") ? mat.GetColor("_Color") :
                 mat.color;
 
-            // 闪 3 下 + 轻微 scale 抖动
             for (int i = 0; i < 3; i++)
             {
                 SetMatColor(mat, new Color(1f, 0.2f, 0.2f));
@@ -75,8 +77,6 @@ namespace TheGlitch
                 m.SetColor("_Color", c);
         }
 
-
-
         private void Awake()
         {
             _rb = GetComponent<Rigidbody>();
@@ -84,20 +84,31 @@ namespace TheGlitch
 
             _defaultGravityScale = GravityScale;
             _defaultDrag = NormalDrag;
+
+            // 记录箱子出生时的高度
+            _startY = transform.position.y;
         }
 
         private void FixedUpdate()
         {
+            // 【新增】高度限制检测：如果在上飘状态且超出了最大高度
+            if (GravityScale < 0 && transform.position.y >= _startY + MaxFloatHeight)
+            {
+                // 强制切为悬停状态
+                GravityScale = HoverScale;
+                // 消除向上冲的惯性，让它瞬间停住
+                _rb.linearVelocity = new Vector3(_rb.linearVelocity.x, 0, _rb.linearVelocity.z);
+            }
+
             Vector3 g = Vector3.down * GravityStrength * GravityScale;
             _rb.AddForce(g, ForceMode.Acceleration);
 
-            _rb.linearDamping = NormalDrag; // 用 NormalDrag 作为当前drag（会被 hack 改）
+            _rb.linearDamping = NormalDrag;
         }
 
         // ===== Wheel hacks =====
         public void GetQuickHacks(out QuickHackOption up, out QuickHackOption right, out QuickHackOption down, out QuickHackOption left)
         {
-            // ↑ 上飘：按一次切换，再按一次撤销
             up = new QuickHackOption
             {
                 Id = "Box_LowG",
@@ -109,7 +120,6 @@ namespace TheGlitch
                 }
             };
 
-            // → 低摩擦：按一次切换，再按一次撤销
             right = new QuickHackOption
             {
                 Id = "Box_LowFriction",
@@ -121,7 +131,6 @@ namespace TheGlitch
                 }
             };
 
-            // ↓ 悬停：按一次切换，再按一次撤销
             down = new QuickHackOption
             {
                 Id = "Box_Hover",
@@ -133,7 +142,6 @@ namespace TheGlitch
                 }
             };
 
-            // ← 破坏：需要充能（长按Q）
             left = new QuickHackOption
             {
                 Id = "Box_Crack",
@@ -148,8 +156,6 @@ namespace TheGlitch
             };
         }
 
-
-        // ===== 深度 hack（暂时可保留）=====
         public List<HackField> GetFields()
         {
             return new List<HackField>
