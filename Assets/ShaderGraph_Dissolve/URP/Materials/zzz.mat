@@ -20,7 +20,7 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: Shader Graphs_Dissolve_Dissolve_Metallic 1
+  m_Name: zzz
   m_Shader: {fileID: -6465566751694194690, guid: 2c6e52535f17dfc4b8e0bb3d1e91aea4, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
@@ -39,7 +39,7 @@ Material:
     serializedVersion: 3
     m_TexEnvs:
     - _BaseMap:
-        m_Texture: {fileID: 2800000, guid: c89fc93ac75eeed48821b21e1b27c1e6, type: 3}
+        m_Texture: {fileID: 2800000, guid: 83548be47571a4a478966b6ec7f93441, type: 3}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _NormalMap:
@@ -73,7 +73,7 @@ Material:
     - _OcclusionStrength: 1
     - _QueueControl: 0
     - _QueueOffset: 0
-    - _Smoothness: 0.932
+    - _Smoothness: 0.701
     m_Colors:
     - _BaseColor: {r: 1, g: 1, b: 1, a: 1}
     - _EdgeColor: {r: 0.7960084, g: 4.8882627, b: 5.3403134, a: 0}

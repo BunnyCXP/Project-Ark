@@ -18,7 +18,8 @@ namespace TheGlitch
             Dead,
             Catching // 【新增】：正在处决/抓捕玩家中
         }
-
+        [Header("Animation")]
+        public Animator anim; // 动画控制器
         [Header("AI Vision")]
         public Transform Player;
         public Transform[] PatrolPoints;
@@ -66,6 +67,9 @@ namespace TheGlitch
             _agent.updateRotation = true;
             _agent.updateUpAxis = true;
 
+            // 【新增】：自动去子物体身上找 Animator 组件
+            anim = GetComponentInChildren<Animator>();
+
             ApplyMoveTuning(PatrolSpeed);
         }
 
@@ -80,8 +84,33 @@ namespace TheGlitch
 
         private void Update()
         {
-            if (_state == State.Dead) return;
+            if (_state == State.Dead)
+            {
+                if (anim != null) anim.speed = 0f; // 如果死了没死亡动画，也可以直接定格
+                return;
+            }
 
+            // 【新增】：根据状态控制动画的播放速度（定格功能）
+            if (anim != null)
+            {
+                if (_state == State.Stunned || _state == State.Frozen)
+                {
+                    anim.speed = 0f; // 速度为0，瞬间定格当前动作！
+                }
+                else
+                {
+                    anim.speed = 1f; // 恢复正常播放
+                }
+            }
+
+            // 之前加的传递移动速度的代码
+            if (anim != null && _agent != null)
+            {
+                float targetSpeed = _agent.desiredVelocity.magnitude;
+                float currentAnimSpeed = anim.GetFloat("Speed");
+                float finalSpeed = Mathf.Lerp(currentAnimSpeed, targetSpeed, Time.deltaTime * 10f);
+                anim.SetFloat("Speed", finalSpeed);
+            }
             switch (_state)
             {
                 case State.Patrol:
