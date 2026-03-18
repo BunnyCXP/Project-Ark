@@ -101,6 +101,7 @@ namespace TheGlitch
 
         [Header("--- 死亡扫描激光设置 ---")]
         public LineRenderer P2_LaserRenderer;
+        public ParticleSystem LaserChargeFX; // <--- 新增的蓄力吸收粒子
         public float P2_LaserAimTime = 3f;
         public float P2_LaserFireTime = 0.15f;
         public float P2_LaserCooldown = 2f;
@@ -125,8 +126,12 @@ namespace TheGlitch
         [Header("第三阶段：终极处决演出")]
         [Tooltip("P3开始时，玩家被强行拉回的起始位置（建议离核心远一点）")]
         public Transform P3_PlayerStartPos;  // <--- 【加上这一行】
+        [Header("第三阶段：风暴粒子特效")]
+        [Tooltip("四周狂乱飞舞的狂风/速度线特效")]
+        public ParticleSystem GlobalWindParticles;
+        [Tooltip("核心向外喷射的能量粒子")]
+        public ParticleSystem CoreEnergyParticles;
 
-    
         [Tooltip("看核心升空发波的专属相机")]
         public CinemachineCamera P3_CoreAscendCamera;
         [Tooltip("核心最终悬浮的位置")]
@@ -156,6 +161,14 @@ namespace TheGlitch
         public GameObject QTE_PromptTextUI;
         public TextMeshProUGUI QTE_TextComponent;
         public Slider QTE_ProgressBar;
+        [Tooltip("长按E时的能量虹吸特效")]
+        public ParticleSystem SiphonParticles;
+
+        [Tooltip("你刚做的声波圆柱材质")]
+        public Material PulseWaveMat; // <--- 加上这一行
+        // 用于实时追踪电磁波的物理半径
+        private float _currentPulseRadius = -1f;
+        private bool _pulseHandledThisRound = false;
 
         private Material[] _wpOriginalMats;
         private int _currentWeakPointIndex = 0;
@@ -873,8 +886,6 @@ namespace TheGlitch
                         _p2StateTimer = P2_LaserAimTime;
                         _currentPhase = BossPhase.Phase2_LaserAiming;
 
-                        // ==========================================
-                        // 【修复激光穿帮】：在 SetActive(true) 之前，强制计算第一帧的位置！
                         if (BossCore != null && P2_LaserRenderer != null && _player != null)
                         {
                             Vector3 startPos = BossCore.position;
@@ -885,14 +896,22 @@ namespace TheGlitch
                             else
                                 _lockedLaserTargetPos = startPos + targetDir.normalized * 100f;
 
-                            // 提前把位置塞进去，杜绝 (0,0,0) 的残影！
                             P2_LaserRenderer.SetPosition(0, startPos);
                             P2_LaserRenderer.SetPosition(1, _lockedLaserTargetPos);
 
                             P2_LaserRenderer.gameObject.SetActive(true);
-                            P2_LaserRenderer.startWidth = 0.05f;
-                            P2_LaserRenderer.endWidth = 0.05f;
-                            P2_LaserRenderer.material.color = new Color(1f, 0f, 0f, 0.4f);
+
+                            // ==========================================
+                            // 【动画起点】：蓄力刚开始时，激光宽度为 0，几乎看不见！
+                            P2_LaserRenderer.startWidth = 0f;
+                            P2_LaserRenderer.endWidth = 0f;
+                            P2_LaserRenderer.material.color = new Color(1f, 0f, 0f, 0f);
+                        }
+
+                        // 【启动粒子】：打开引力场，开始吸收四周的能量！
+                        if (LaserChargeFX != null)
+                        {
+                            LaserChargeFX.Play();
                         }
                         // ==========================================
                     }
@@ -909,14 +928,36 @@ namespace TheGlitch
 
                         RaycastHit hit;
                         if (Physics.Raycast(startPos, targetDir, out hit, 100f, P2_LaserHitMask))
-                        {
                             _lockedLaserTargetPos = hit.point;
-                        }
                         else
-                        {
                             _lockedLaserTargetPos = startPos + targetDir.normalized * 100f;
-                        }
+
                         P2_LaserRenderer.SetPosition(1, _lockedLaserTargetPos);
+
+                        // ==========================================
+                        // 【核心动画】：随着时间推移的蓄力演出！
+                        // chargeProgress 会在 3 秒内从 0 平滑涨到 1
+                        float chargeProgress = 1f - (_p2StateTimer / P2_LaserAimTime);
+
+                        // 1. 让粒子吸收管永远精准指向目标点
+                        if (LaserChargeFX != null)
+                        {
+                            LaserChargeFX.transform.LookAt(_lockedLaserTargetPos);
+                        }
+
+                        // 2. 射线宽度慢慢变宽 (0 -> 0.1)
+                        float baseWidth = Mathf.Lerp(0f, 0.1f, chargeProgress);
+
+                        // 3. 狂暴闪烁：蓄力过半后，射线开始发生高频的不稳定跳动！
+                        float jitter = chargeProgress > 0.6f ? Random.Range(-0.04f, 0.04f) : 0f;
+                        float currentWidth = Mathf.Max(0.01f, baseWidth + jitter);
+
+                        P2_LaserRenderer.startWidth = currentWidth;
+                        P2_LaserRenderer.endWidth = currentWidth;
+
+                        // 4. 颜色由暗红慢慢变得极度刺眼发白
+                        P2_LaserRenderer.material.color = new Color(1f, chargeProgress * 0.8f, chargeProgress * 0.8f, chargeProgress);
+                        // ==========================================
                     }
 
                     _p2StateTimer -= Time.deltaTime;
@@ -926,12 +967,18 @@ namespace TheGlitch
                         _currentPhase = BossPhase.Phase2_LaserFiring;
                         _hasLaserDamagedPlayer = false;
 
+                        // ==========================================
+                        // 【爆发】：蓄力结束，停止吸气！
+                        if (LaserChargeFX != null) LaserChargeFX.Stop();
+
+                        // 射线瞬间膨胀为毁灭光柱！
                         if (P2_LaserRenderer != null)
                         {
                             P2_LaserRenderer.startWidth = 1.2f;
                             P2_LaserRenderer.endWidth = 1.2f;
                             P2_LaserRenderer.material.color = Color.white;
                         }
+                        // ==========================================
                         RawCameraShake.Shake(0.5f, 0.4f);
                     }
                     break;
@@ -944,6 +991,7 @@ namespace TheGlitch
                         P2_LaserRenderer.SetPosition(0, BossCore.position);
                         P2_LaserRenderer.SetPosition(1, _lockedLaserTargetPos);
 
+                        // 光柱开火后的余晖衰减
                         float progress = 1f - (_p2StateTimer / P2_LaserFireTime);
                         float currentWidth = Mathf.Lerp(1.2f, 0f, progress);
                         P2_LaserRenderer.startWidth = currentWidth;
@@ -986,29 +1034,41 @@ namespace TheGlitch
                     }
                     break;
 
-                case BossPhase.Phase2_Stunned:
-                    MaintainLockOnCamera();
-                    break;
 
                 // ==========================================
-                // 【新增】：第三阶段互动逻辑 (步步逼近核心)
+                // 【修改】：第三阶段互动逻辑 (A/D 步步逼近核心)
                 // ==========================================
                 case BossPhase.Phase3_Walk1:
-                    if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
-                        StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_1, P3_WalkCamera_2, BossPhase.Phase3_Walk2));
+                    if (Keyboard.current != null && (Keyboard.current.aKey.wasPressedThisFrame || Keyboard.current.dKey.wasPressedThisFrame))
+                        StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_1, P3_WalkCamera_2, BossPhase.Phase3_Walk2, Keyboard.current.aKey.wasPressedThisFrame));
                     break;
 
                 case BossPhase.Phase3_Walk2:
-                    if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
-                        StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_2, P3_WalkCamera_3, BossPhase.Phase3_Walk3));
+                    if (Keyboard.current != null && (Keyboard.current.aKey.wasPressedThisFrame || Keyboard.current.dKey.wasPressedThisFrame))
+                        StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_2, P3_WalkCamera_3, BossPhase.Phase3_Walk3, Keyboard.current.aKey.wasPressedThisFrame));
                     break;
 
                 case BossPhase.Phase3_Walk3:
-                    if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
-                        StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_3, P3_ExecutionCamera, BossPhase.Phase3_Execution));
+                    if (Keyboard.current != null && (Keyboard.current.aKey.wasPressedThisFrame || Keyboard.current.dKey.wasPressedThisFrame))
+                        StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_3, P3_ExecutionCamera, BossPhase.Phase3_Execution, Keyboard.current.aKey.wasPressedThisFrame));
                     break;
 
                 case BossPhase.Phase3_Execution:
+                    // ==========================================
+                    // 无论按不按E，黑洞中心和发射区必须永远死死锁定在玩家胸口和Boss身上！
+                    if (SiphonParticles != null && BossCore != null && _player != null)
+                    {
+                        // 完美贴合胸口的位置
+                        Vector3 chestPos = _player.transform.position + Vector3.up * 0.8f - _player.transform.right * 0f;
+
+                        SiphonParticles.transform.position = chestPos;
+                        SiphonParticles.transform.rotation = Quaternion.identity;
+
+                        var shape = SiphonParticles.shape;
+                        shape.position = BossCore.position - chestPos;
+                    }
+                    // ==========================================
+
                     if (Keyboard.current != null && Keyboard.current.eKey.isPressed)
                     {
                         if (QTE_ProgressBar != null && !QTE_ProgressBar.gameObject.activeSelf)
@@ -1019,44 +1079,89 @@ namespace TheGlitch
 
                         _p2HackGauge += Time.deltaTime;
                         if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p2HackGauge;
-
-                        // 随着长按，屏幕震动越来越剧烈，UI疯狂跳动！
                         ApplyUIPunch(_p2HackGauge / P3_ExecutionTimeRequired);
-                        float shakeMagnitude = Mathf.Lerp(0.1f, 1.2f, _p2HackGauge / P3_ExecutionTimeRequired);
-                        RawCameraShake.Shake(shakeMagnitude, shakeMagnitude * 0.8f);
+
+                        float pullProgress = Mathf.Clamp01(_p2HackGauge / P3_ExecutionTimeRequired);
+
+                        // 1. 核心的拉扯位移
+                        if (BossCore != null && P3_CoreAscendPos != null && _player != null)
+                        {
+                            Vector3 startPos = P3_CoreAscendPos.position;
+                            Vector3 targetPos = _player.transform.position + Vector3.up * 0.8f + _player.transform.forward * 0.5f;
+                            BossCore.position = Vector3.Lerp(startPos, targetPos, Mathf.SmoothStep(0f, 1f, pullProgress));
+                        }
+
+                        // 2. 空间扭曲 (Dolly Zoom)
+                        if (P3_ExecutionCamera != null)
+                        {
+                            P3_ExecutionCamera.Lens.FieldOfView = Mathf.Lerp(60f, 25f, pullProgress);
+                        }
+
+                        // 3. 【优化】：大幅削弱镜头摇晃！(从 0.5f 降到 0.08f) 让你的特效清晰可见！
+                        float heavyShake = Mathf.Lerp(0f, 0.08f, pullProgress);
+                        if (heavyShake > 0) RawCameraShake.Shake(heavyShake, 0.1f);
+
+                        // 4. 【完美修复特效断档】：通过控制 Emission(发射器) 来实现无缝续传！
+                        if (SiphonParticles != null)
+                        {
+                            // 如果系统处于休眠，先唤醒它
+                            if (!SiphonParticles.isPlaying) SiphonParticles.Play();
+
+                            // 打开水龙头，开始疯狂发射！
+                            var em = SiphonParticles.emission;
+                            em.enabled = true;
+                        }
 
                         if (_p2HackGauge >= P3_ExecutionTimeRequired)
                         {
-                            // 彻底销毁逻辑！
                             _currentPhase = BossPhase.Dead;
                             HideQTEPrompt();
                             if (QTE_ProgressBar) QTE_ProgressBar.gameObject.SetActive(false);
 
-                            Debug.Log("<color=red>【剧终】Boss彻底死亡！</color>");
-                            RawCameraShake.Shake(2.0f, 1.5f); // 毁灭性大爆炸震屏
-                            StopAllBGM(); // 掐断音乐
-
-                            // ==========================================
-                            // 【新增】：Boss 死亡后，风暴停止，让主角解除定格，恢复正常呼吸站立！
+                            StopAllBGM();
 
                             if (_playerAnimator != null)
                             {
-                                // 加上这一句：重新插上电源通电！
                                 _playerAnimator.enabled = true;
                                 _playerAnimator.speed = 1f;
-                                _playerAnimator.CrossFade("Grounded", 0.5f); // 0.5秒平滑起身
+                                _playerAnimator.CrossFade("Grounded", 0.5f);
                             }
-                            // ==========================================
-                            // ==========================================
+
+                            if (GlobalWindParticles != null) GlobalWindParticles.Stop();
+                            if (CoreEnergyParticles != null) CoreEnergyParticles.Stop();
+                            if (SiphonParticles != null) SiphonParticles.Stop();
+
+                            StartCoroutine(WhiteoutEndingRoutine());
                         }
                     }
                     else
                     {
-                        // 没按住的话进度条飞速回退
+                        // 如果松开 E 键，进度条倒退，核心像有弹力一样飘回天上
                         _p2HackGauge = Mathf.Max(0, _p2HackGauge - Time.deltaTime * 3f);
                         if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p2HackGauge;
+
+                        float pullProgress = Mathf.Clamp01(_p2HackGauge / P3_ExecutionTimeRequired);
+
+                        if (BossCore != null && P3_CoreAscendPos != null && _player != null)
+                        {
+                            Vector3 targetPos = _player.transform.position + Vector3.up * 0.8f + _player.transform.forward * 0.5f;
+                            BossCore.position = Vector3.Lerp(P3_CoreAscendPos.position, targetPos, Mathf.SmoothStep(0f, 1f, pullProgress));
+                        }
+
+                        if (P3_ExecutionCamera != null)
+                        {
+                            P3_ExecutionCamera.Lens.FieldOfView = Mathf.Lerp(60f, 25f, pullProgress);
+                        }
+
+                        // 【完美修复特效断档】：松手时，仅仅关闭“水龙头(发射器)”，不关闭系统本身。
+                        // 这样残留的粒子会继续飞向玩家，且下次按 E 瞬间就能续上！
+                        if (SiphonParticles != null)
+                        {
+                            var em = SiphonParticles.emission;
+                            em.enabled = false;
+                        }
                     }
-                    RecoverUIPunch(); // 通用 UI 平滑恢复
+                    RecoverUIPunch();
                     break;
             }
         }
@@ -1222,6 +1327,14 @@ namespace TheGlitch
             }
 
             // 3. 核心升空 + 散发高压电波 (全损震动)
+
+            // ==========================================
+            // 【新增】：狂风起！能量爆发！
+            if (GlobalWindParticles != null) GlobalWindParticles.Play();
+            if (CoreEnergyParticles != null) CoreEnergyParticles.Play();
+            // ==========================================
+
+
             Vector3 ascendTarget = P3_CoreAscendPos != null ? P3_CoreAscendPos.position : originalCorePos + Vector3.up * 8f;
             float ascendDuration = 4f;
             float t = 0;
@@ -1245,8 +1358,6 @@ namespace TheGlitch
                     if (P3_CoreAscendCamera) P3_CoreAscendCamera.Priority = 0;
                     if (P3_WalkCamera_1) P3_WalkCamera_1.Priority = 100;
 
-                    // ==========================================
-                    // 【新增修复】：趁着黑屏，把玩家强行传送到 P3 的完美起步点！
                     if (P3_PlayerStartPos != null && _player != null)
                     {
                         CharacterController cc = _player.GetComponent<CharacterController>();
@@ -1257,20 +1368,32 @@ namespace TheGlitch
 
                         if (cc != null) cc.enabled = true;
                     }
+
+                    // ==========================================
+                    // 【新增】：黑屏瞬间把第二阶段的柱子全部隐藏，清理战场！
+                    if (P2_Pillars != null)
+                    {
+                        foreach (GameObject pillar in P2_Pillars)
+                        {
+                            if (pillar != null) pillar.SetActive(false);
+                        }
+                    }
                     // ==========================================
                 });
                 yield return new WaitForSeconds(1.0f);
             }
 
-            // 5. 提醒玩家按E挣扎前进
+            // 5. 提醒玩家按 A 或 D 挣扎前进
             _currentPhase = BossPhase.Phase3_Walk1;
-            ShowQTEPrompt("[E] Move On!");
+            ShowQTEPrompt("[A] / [D] Alternate steps to move forward!");
         }
 
+
         // 通用的“玩家走一段路 -> 切下一个机位”的协程
-        private IEnumerator CinematicWalkRoutine(Transform targetPos, CinemachineCamera nextCamera, BossPhase nextPhase)
+        // 【重构】：2秒定频脉冲 + E键只防守不前进
+        private IEnumerator CinematicWalkRoutine(Transform targetPos, CinemachineCamera nextCamera, BossPhase nextPhase, bool firstStepWasLeft)
         {
-            _currentPhase = BossPhase.Phase3_Cinematic; // 移动中锁死按键响应
+            _currentPhase = BossPhase.Phase3_Cinematic;
             HideQTEPrompt();
 
             if (_player != null && targetPos != null)
@@ -1280,46 +1403,134 @@ namespace TheGlitch
 
                 if (_playerAnimator != null)
                 {
-                    // 【修正 1】：确保通电，并且把 0.4 写在这里！
-                    // 这样走在路上的时候，才是沉重的慢动作！
                     _playerAnimator.enabled = true;
-                    _playerAnimator.speed = 0.4f;
-
-                    // 暴力强切动作
+                    _playerAnimator.speed = 1f;
                     _playerAnimator.Play("StruggleWalk", 0, 0f);
                 }
 
                 Vector3 startPos = _player.transform.position;
                 Vector3 endPos = targetPos.position;
-
-                // 算好目标朝向
                 Quaternion targetRot = Quaternion.LookRotation(endPos - startPos);
                 _player.transform.rotation = targetRot;
 
-                float walkTime = 8.0f; // 走5秒，很慢很沉重
-                float t = 0;
-                while (t < walkTime)
+                int totalSteps = 16;
+                float targetProgress = 1f;
+                float currentProgress = 0f;
+
+                bool expectLeft = !firstStepWasLeft;
+
+                // 【修改 1】：脉冲计时器设为绝对的 2.0 秒！
+                float pulseTimer = 2.0f;
+                ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+
+                yield return null;
+
+                while (targetProgress < totalSteps || currentProgress < totalSteps - 0.1f)
                 {
-                    t += Time.deltaTime;
-                    _player.transform.position = Vector3.Lerp(startPos, endPos, t / walkTime);
+                    // === 1. 发射电磁波倒计时 ===
+                    pulseTimer -= Time.deltaTime;
+                    if (pulseTimer <= 0f && _currentPulseRadius < 0f)
+                    {
+                        // 【修改 2】：一波结束后，严格等待 2.0 秒再发下一波！
+                        pulseTimer = 2.0f;
+                        _pulseHandledThisRound = false;
+                        StartCoroutine(SpawnPulseVisualEffect());
+                    }
 
-                    // ==========================================
-                    // 【修正 2】：漏掉的防歪代码！必须放在 while 循环里！
-                    // 每一帧都把主角掰正，绝对不让他走歪！
+                    // === 2. 【核心】：雷达测距！计算波浪边缘离玩家还有多远 ===
+                    bool isPulseIncoming = false;
+
+                    if (_currentPulseRadius > 0f && !_pulseHandledThisRound)
+                    {
+                        Vector2 bossPos2D = new Vector2(BossCore.position.x, BossCore.position.z);
+                        Vector2 playerPos2D = new Vector2(_player.transform.position.x, _player.transform.position.z);
+                        float distToPlayer = Vector2.Distance(bossPos2D, playerPos2D);
+
+                        float distanceToWave = distToPlayer - _currentPulseRadius;
+
+                        // 判定 A：波浪逼近，进入格挡窗口期！（距离玩家 8 米内）
+                        if (distanceToWave <= 8.0f && distanceToWave >= 0f)
+                        {
+                            isPulseIncoming = true; // 锁定迈步
+
+                            if (Mathf.FloorToInt(Time.time * 15) % 2 == 0)
+                                ShowQTEPrompt("<color=red> Pulse is coming! Press [E] !</color>");
+                            else
+                                ShowQTEPrompt("<color=white> Pulse is coming! Press [E] !</color>");
+
+                            if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
+                            {
+                                _pulseHandledThisRound = true; // 完美格挡！
+                                Debug.Log("<color=cyan>成功驱散脉冲！格挡成功，留在原地！</color>");
+                                RawCameraShake.Shake(0.3f, 0.2f);
+
+                                // 【修改 3】：删除了奖励前进的代码，现在只格挡，不前进！
+                                // targetProgress = Mathf.Min(totalSteps, targetProgress + 1.5f); 
+
+                                ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+                            }
+                        }
+                        // 判定 B：波浪越过了玩家（距离 < 0），且玩家没格挡 -> 挨打被击退！
+                        else if (distanceToWave < 0f)
+                        {
+                            _pulseHandledThisRound = true;
+                            Debug.Log("<color=red>Struck by electromagnetic waves! Defused!</color>");
+                            RawCameraShake.Shake(1.0f, 0.5f);
+                            targetProgress = Mathf.Max(0, targetProgress - 1.5f);
+                            ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+                        }
+                    }
+
+                    // === 3. 走路输入逻辑 (电磁波警告期间必须专注按E，不能按AD) ===
+                    if (Keyboard.current != null && !isPulseIncoming)
+                    {
+                        bool pressedA = Keyboard.current.aKey.wasPressedThisFrame;
+                        bool pressedD = Keyboard.current.dKey.wasPressedThisFrame;
+
+                        if (pressedA || pressedD)
+                        {
+                            if ((expectLeft && pressedA) || (!expectLeft && pressedD))
+                            {
+                                expectLeft = !expectLeft;
+                                targetProgress = Mathf.Min(totalSteps, targetProgress + 1f);
+                                RawCameraShake.Shake(0.08f, 0.1f);
+                                ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+                            }
+                            else
+                            {
+                                RawCameraShake.Shake(0.2f, 0.2f);
+                                targetProgress = Mathf.Max(0, targetProgress - 0.6f);
+                                ShowQTEPrompt("<color=yellow>Stagger! Be careful to alternate between your left and right feet.</color>");
+                            }
+                        }
+                    }
+
+                    // === 4. 物理平滑移动与倒放动画 ===
+                    if (currentProgress != targetProgress)
+                    {
+                        float moveDir = targetProgress > currentProgress ? 1f : -1f;
+                        float speed = moveDir > 0 ? 3.0f : 4.5f;
+
+                        currentProgress = Mathf.MoveTowards(currentProgress, targetProgress, Time.deltaTime * speed);
+                        _player.transform.position = Vector3.Lerp(startPos, endPos, currentProgress / totalSteps);
+
+                        if (_playerAnimator != null)
+                        {
+                            _playerAnimator.enabled = true;
+                            _playerAnimator.speed = moveDir > 0 ? 1f : -1f;
+                        }
+                    }
+                    else if (_playerAnimator != null) _playerAnimator.speed = 0f;
+
                     _player.transform.rotation = targetRot;
-                    // ==========================================
-
-                    RawCameraShake.Shake(0.05f, 0.05f); // 微弱震动
                     yield return null;
                 }
 
-                // ==========================================
-                // 【修正 3】：走到了，直接拔电源定格！而不是设为 0.4f
                 if (_playerAnimator != null)
                 {
+                    _playerAnimator.speed = 0f;
                     _playerAnimator.enabled = false;
                 }
-                // ==========================================
             }
 
             if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
@@ -1327,25 +1538,61 @@ namespace TheGlitch
             if (P3_WalkCamera_1) P3_WalkCamera_1.Priority = 0;
             if (P3_WalkCamera_2) P3_WalkCamera_2.Priority = 0;
             if (P3_WalkCamera_3) P3_WalkCamera_3.Priority = 0;
-
             if (nextCamera != null) nextCamera.Priority = 100;
 
             yield return new WaitForEndOfFrame();
-
             _currentPhase = nextPhase;
 
             if (nextPhase == BossPhase.Phase3_Execution)
-            {
-                _p2HackGauge = 0f;
                 ShowQTEPrompt("[HOLD E] Do It!");
-            }
             else
-            {
-                ShowQTEPrompt("[E] Keep On!");
-            }
+                ShowQTEPrompt("[A] / [D] Keeping On!");
         }
         #endregion
+        #region Visual Effects (第三阶段视觉特效)
+        // 动态生成一个贴地扩散的扁平扫描盘
+        // 动态生成一个贴地扩散的扁平扫描盘
+        private IEnumerator SpawnPulseVisualEffect()
+        {
+            if (BossCore == null || _player == null) yield break;
 
+            GameObject pulseDisc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Destroy(pulseDisc.GetComponent<Collider>());
+
+            // 【修改 1】：高度既然变了，位置也要稍微往上抬一点，让光环贴着地
+            // 假设光环 1.5 米高，中心点就在 y + 0.75f 的位置
+            pulseDisc.transform.position = new Vector3(BossCore.position.x, _player.transform.position.y + 0.75f, BossCore.position.z);
+
+            Renderer r = pulseDisc.GetComponent<Renderer>();
+            r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            if (PulseWaveMat != null) r.material = PulseWaveMat;
+
+            float duration = 2.5f;
+            float t = 0;
+
+            // 【修改 2】：把高度(Y)从 0.05f 改成 1.5f ！！
+            // 这样侧面就会有一堵 1.5 米高的透明光墙扫过来，心电图波浪绝对清晰可见！
+            Vector3 startScale = new Vector3(1f, 1.5f, 1f);
+            Vector3 endScale = new Vector3(100f, 1.5f, 100f);
+
+            while (t < duration)
+            {
+                t += Time.deltaTime;
+                float progress = t / duration;
+
+                pulseDisc.transform.localScale = Vector3.Lerp(startScale, endScale, progress);
+                _currentPulseRadius = pulseDisc.transform.localScale.x / 2f;
+
+                if (r.material.HasProperty("_Fade"))
+                    r.material.SetFloat("_Fade", Mathf.Lerp(1f, 0f, progress));
+
+                yield return null;
+            }
+
+            _currentPulseRadius = -1f;
+            Destroy(pulseDisc);
+        }
+        #endregion
         #region Tools & UI (保持不变)
         private IEnumerator CinematicCameraPan(Transform target, float transitionTime, float endSlowMoScale)
         {
@@ -1428,7 +1675,52 @@ namespace TheGlitch
 
         private void HideQTEPrompt() => QTE_PromptTextUI?.SetActive(false);
         #endregion
+        #region Ending Cinematic (大结局演出)
+        // 动态生成一个无敌全屏白光，随后切黑
+        private IEnumerator WhiteoutEndingRoutine()
+        {
+            // 1. 代码动态创建一个优先级最高的 Canvas，保证挡住全屏所有东西
+            GameObject canvasObj = new GameObject("EndingWhiteoutCanvas");
+            Canvas canvas = canvasObj.AddComponent<Canvas>();
+            canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            canvas.sortingOrder = 32767; // 最高层级
 
+            GameObject imageObj = new GameObject("WhiteImage");
+            imageObj.transform.SetParent(canvasObj.transform, false);
+            Image img = imageObj.AddComponent<Image>();
+            img.color = new Color(1f, 1f, 1f, 0f); // 初始全透明
+
+            RectTransform rect = img.GetComponent<RectTransform>();
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = Vector2.zero;
+            rect.offsetMax = Vector2.zero;
+
+            // 2. 接触瞬间：极速致盲的白光爆炸 (0.1秒)
+            // 这里只给一个瞬间的微弱碰撞震动，代表核心撞到了玩家
+            RawCameraShake.Shake(0.4f, 0.2f);
+
+            float t = 0;
+            float flashDuration = 0.1f;
+            while (t < flashDuration)
+            {
+                t += Time.unscaledDeltaTime;
+                img.color = new Color(1f, 1f, 1f, Mathf.Lerp(0f, 1f, t / flashDuration));
+                yield return null;
+            }
+            img.color = Color.white;
+
+            // 3. 保持刺眼的白屏 2.5 秒钟 (让玩家在无BGM的静音中感受震撼)
+            yield return new WaitForSecondsRealtime(2.5f);
+
+            // 4. 瞬间切成黑屏！
+            img.color = Color.black;
+
+            Debug.Log("<color=green>【结局】屏幕已黑！等待后续结局制作...</color>");
+
+            // 在这里你可以随意添加加载制作人员名单（Credits）或者返回主菜单的代码
+        }
+        #endregion
         #region Gizmos
         private void OnDrawGizmosSelected()
         {
