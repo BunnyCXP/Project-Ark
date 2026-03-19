@@ -20,7 +20,7 @@ namespace TheGlitch
         private enum BossPhase
         {
             Waiting, Intro, P1_Dodging, P1_QTE, Transitioning,
-            Phase2_Idle, Phase2_LaserAiming, Phase2_LaserFiring, Phase2_Stunned,
+            Phase2_Idle, Phase2_LaserAiming, Phase2_LaserFiring, Phase2_HackingMinigame, Phase2_Stunned, // <--- 这里加了 Phase2_HackingMinigame
             Phase3_Cinematic, Phase3_Walk1, Phase3_Walk2, Phase3_Walk3, Phase3_Execution, Dead
         }
         private BossPhase _currentPhase = BossPhase.Waiting;
@@ -119,6 +119,28 @@ namespace TheGlitch
         private enum PillarState { Normal, Exposed, Hacked }
         private PillarState[] _pillarStates;
         private float _p2HackGauge = 0f;
+        // ==========================================
+        // 【新增】：二阶段骇客输入控制 (完美复用 HackWheel 手感)
+        // ==========================================
+    
+
+        [Header("--- 骇客输入控制 ---")]
+        public float HackDeadZone = 35f;
+        public float HackMaxRadius = 120f;
+        private Vector2 _hackAccum;
+
+        [Header("--- 骇客轮盘 UI 引用 ---")]
+        public HackWheelUI BossHackWheel; // <--- 拖入你场景里的骇客轮盘
+
+        [Header("P2 序列记忆破解 (全息投影)")]
+        public int P2_SequenceLength = 4;
+        public float P2_HackTimeLimit = 5.0f;
+        private System.Collections.Generic.List<WheelDir> _p2Sequence = new System.Collections.Generic.List<WheelDir>();
+        private int _p2CurrentSeqIndex = 0;
+        private int _p2TargetPillarIndex = -1;
+        private WheelDir _p2LastInput = WheelDir.None;
+        private float _p2HackTimer = 0f;
+        private float _p2InputCooldownTimer = 0f;
 
         // ==========================================
         // 【新增】：第三阶段 电影化终极处决运镜
@@ -233,7 +255,8 @@ namespace TheGlitch
         }
 
         private void OnDisable() => Time.timeScale = 1f;
-
+     
+      
         private void InitUI()
         {
             if (WarningTextUI) WarningTextUI.SetActive(false);
@@ -939,17 +962,22 @@ namespace TheGlitch
                         // chargeProgress 会在 3 秒内从 0 平滑涨到 1
                         float chargeProgress = 1f - (_p2StateTimer / P2_LaserAimTime);
 
-                        // 1. 让粒子吸收管永远精准指向目标点
+                        // 1. 让粒子吸收管永远精准指向目标点，并让粒子数量极速飙升！
                         if (LaserChargeFX != null)
                         {
                             LaserChargeFX.transform.LookAt(_lockedLaserTargetPos);
+
+                            // 【绝杀修复】：用代码强制控制粒子的喷发量！
+                            // 蓄力刚开始时 50，蓄力快满时狂飙到 1000！绝对连贯！
+                            var em = LaserChargeFX.emission;
+                            em.rateOverTime = Mathf.Lerp(50f, 1000f, chargeProgress);
                         }
 
-                        // 2. 射线宽度慢慢变宽 (0 -> 0.1)
-                        float baseWidth = Mathf.Lerp(0f, 0.1f, chargeProgress);
+                        // 2. 射线宽度慢慢变宽，我也帮你加粗了一点 (0 -> 0.2)
+                        float baseWidth = Mathf.Lerp(0f, 0.2f, chargeProgress);
 
                         // 3. 狂暴闪烁：蓄力过半后，射线开始发生高频的不稳定跳动！
-                        float jitter = chargeProgress > 0.6f ? Random.Range(-0.04f, 0.04f) : 0f;
+                        float jitter = chargeProgress > 0.6f ? Random.Range(-0.06f, 0.06f) : 0f;
                         float currentWidth = Mathf.Max(0.01f, baseWidth + jitter);
 
                         P2_LaserRenderer.startWidth = currentWidth;
@@ -1034,7 +1062,10 @@ namespace TheGlitch
                     }
                     break;
 
-
+                case BossPhase.Phase2_HackingMinigame:
+                    MaintainLockOnCamera(); // 保持视角锁定
+                    UpdateP2HackingMinigame(); // 运行骇客轮盘检测
+                    break;
                 // ==========================================
                 // 【修改】：第三阶段互动逻辑 (A/D 步步逼近核心)
                 // ==========================================
@@ -1190,36 +1221,20 @@ namespace TheGlitch
 
             if (nearestExposedIndex != -1)
             {
-                ShowQTEPrompt("[HOLD E] INJECT MALWARE");
+                // 改成提示按一下E
+                ShowQTEPrompt("[PRESS E] HACK FIREWALL");
 
-                if (QTE_ProgressBar != null && !QTE_ProgressBar.gameObject.activeSelf)
+                if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
                 {
-                    QTE_ProgressBar.gameObject.SetActive(true);
-                    QTE_ProgressBar.maxValue = P2_HackTimeRequired;
-                    QTE_ProgressBar.value = _p2HackGauge;
-                }
-
-                if (Keyboard.current != null && Keyboard.current.eKey.isPressed)
-                {
-                    _p2HackGauge += Time.deltaTime;
-                    if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p2HackGauge;
-                    ApplyUIPunch(_p2HackGauge / P2_HackTimeRequired);
-
-                    if (_p2HackGauge >= P2_HackTimeRequired) ExecuteHack(nearestExposedIndex);
-                }
-                else
-                {
-                    _p2HackGauge = Mathf.Max(0, _p2HackGauge - Time.deltaTime * 3f);
-                    if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p2HackGauge;
+                    HideQTEPrompt();
+                    StartP2HackingMinigame(nearestExposedIndex); // 开始小游戏！
                 }
             }
             else
             {
-                _p2HackGauge = 0f;
                 HideQTEPrompt();
                 if (QTE_ProgressBar != null) QTE_ProgressBar.gameObject.SetActive(false);
             }
-
             RecoverUIPunch();
         }
 
@@ -1234,7 +1249,391 @@ namespace TheGlitch
 
             StartCoroutine(BossStunRoutine());
         }
+        // ==========================================
+        // 【新增】：骇客小游戏专属全息面板变量
+        private GameObject _holoBoardObj;
+        private TextMeshProUGUI _holoBoardText;
+        private RectTransform _scanlineRT; // <--- 新增：用于控制扫描线的物理组件
+        private void StartP2HackingMinigame(int pillarIndex)
+        {
+            _currentPhase = BossPhase.Phase2_HackingMinigame;
+            _p2TargetPillarIndex = pillarIndex;
+            _p2CurrentSeqIndex = 0;
+            _p2LastInput = WheelDir.None;
+            _p2HackTimer = P2_HackTimeLimit;
 
+            // 开局给 0.2 秒时间让玩家停稳鼠标，防止进场误触
+            _p2InputCooldownTimer = 0.2f;
+
+            // 隐藏并锁定鼠标
+            Cursor.lockState = CursorLockMode.Locked;
+            Cursor.visible = false;
+            DisablePlayerAbilities(true);
+
+            HideQTEPrompt();
+
+            // 生成真实的目标序列
+            _p2Sequence.Clear();
+            for (int i = 0; i < P2_SequenceLength; i++)
+            {
+                WheelDir randomDir = (WheelDir)Random.Range(1, 5);
+                _p2Sequence.Add(randomDir);
+            }
+
+            if (BossHackWheel != null)
+            {
+                RectTransform wheelRT = BossHackWheel.GetComponent<RectTransform>();
+                if (wheelRT != null)
+                {
+                    float offsetX = (wheelRT.pivot.x - 0.5f) * wheelRT.rect.width;
+                    float offsetY = (wheelRT.pivot.y - 0.5f) * wheelRT.rect.height;
+                    BossHackWheel.FollowScreenOffset = new Vector2(offsetX, offsetY);
+                }
+
+                BossHackWheel.FollowWorldOffset = Vector3.zero;
+
+                var optUp = new QuickHackOption { Name = "UP" };
+                var optRight = new QuickHackOption { Name = "RIGHT" };
+                var optDown = new QuickHackOption { Name = "DOWN" };
+                var optLeft = new QuickHackOption { Name = "LEFT" };
+                BossHackWheel.Open(optUp, optRight, optDown, optLeft);
+
+                if (P2_Pillars[_p2TargetPillarIndex] != null)
+                {
+                    Renderer r = P2_Pillars[_p2TargetPillarIndex].GetComponentInChildren<Renderer>();
+                    Transform targetT = r != null ? r.transform : P2_Pillars[_p2TargetPillarIndex].transform;
+                    BossHackWheel.SetFollow(targetT, Camera.main);
+                }
+            }
+
+            // 【修改】：创建全息板，并启动“老虎机”协程！
+            CreateHoloBoard();
+            if (_holoBoardObj != null) _holoBoardObj.SetActive(true);
+            StartCoroutine(RollingHologramRoutine());
+        }
+
+        private void UpdateP2HackingMinigame()
+        {
+            _p2HackTimer -= Time.deltaTime;
+
+            if (_p2HackTimer <= 0f)
+            {
+                FailP2Hacking("TIMEOUT! (骇客超时)");
+                return;
+            }
+
+            if (_p2InputCooldownTimer > 0f)
+            {
+                _p2InputCooldownTimer -= Time.deltaTime;
+                if (_p2InputCooldownTimer <= 0f)
+                {
+                    if (BossHackWheel != null)
+                    {
+                        RectTransform wheelRT = BossHackWheel.GetComponent<RectTransform>();
+                        if (wheelRT != null)
+                        {
+                            float offsetX = (wheelRT.pivot.x - 0.5f) * wheelRT.rect.width;
+                            float offsetY = (wheelRT.pivot.y - 0.5f) * wheelRT.rect.height;
+                            BossHackWheel.FollowScreenOffset = new Vector2(offsetX, offsetY);
+                        }
+
+                        var optUp = new QuickHackOption { Name = "UP" };
+                        var optRight = new QuickHackOption { Name = "RIGHT" };
+                        var optDown = new QuickHackOption { Name = "DOWN" };
+                        var optLeft = new QuickHackOption { Name = "LEFT" };
+                        BossHackWheel.Open(optUp, optRight, optDown, optLeft);
+                    }
+                    _p2LastInput = WheelDir.None;
+                }
+                return;
+            }
+
+            if (BossHackWheel != null && Mouse.current != null)
+            {
+                BossHackWheel.FeedMouseDelta(Mouse.current.delta.ReadValue());
+            }
+
+            WheelDir currentInput = BossHackWheel != null ? BossHackWheel.CurrentDir : WheelDir.None;
+
+            if (currentInput != WheelDir.None && currentInput != _p2LastInput)
+            {
+                if (currentInput == _p2Sequence[_p2CurrentSeqIndex])
+                {
+                    _p2CurrentSeqIndex++;
+                    RawCameraShake.Shake(0.05f, 0.1f);
+                    // ==========================================
+                    // 【新增】：每次破解成功，全息面板都会“砰”地震动一下，打击感拉满！
+                    StartCoroutine(HoloBoardPunch());
+                    // ==========================================
+                    // 【修改】：这里删除了之前的 UpdateSequenceUI，因为老虎机会自动检测更新！
+
+                    if (_p2CurrentSeqIndex >= P2_SequenceLength)
+                    {
+                        if (BossHackWheel != null) BossHackWheel.Close();
+                        if (_holoBoardObj != null) _holoBoardObj.SetActive(false);
+                        Cursor.lockState = CursorLockMode.Locked;
+                        DisablePlayerAbilities(false);
+                        ExecuteHack(_p2TargetPillarIndex);
+                    }
+                    else
+                    {
+                        _p2InputCooldownTimer = 0.25f;
+                    }
+                }
+                else
+                {
+                    FailP2Hacking("WRONG SEQUENCE! (输入错误)");
+                }
+            }
+            else if (currentInput == WheelDir.None)
+            {
+                _p2LastInput = WheelDir.None;
+            }
+            else
+            {
+                _p2LastInput = currentInput;
+            }
+        }
+
+        private void FailP2Hacking(string reason)
+        {
+            if (BossHackWheel != null) BossHackWheel.Close();
+            if (_holoBoardObj != null) _holoBoardObj.SetActive(false); // 失败也关掉全息板
+
+            Debug.Log($"<color=red>【破解失败】{reason} 防火墙重置！</color>");
+            RawCameraShake.Shake(0.5f, 0.3f);
+
+            Cursor.lockState = CursorLockMode.Locked;
+            DisablePlayerAbilities(false);
+
+            _pillarStates[_p2TargetPillarIndex] = PillarState.Normal;
+            ChangePillarMaterial(_p2TargetPillarIndex, PillarNormalMat);
+
+            _currentPhase = BossPhase.Phase2_Idle;
+        }
+
+        // ==========================================
+        // 下面这四个函数负责“全息暗色面板”与极致赛博表现
+        // ==========================================
+        // ==========================================
+        // 下面这四个函数负责“全息暗色面板”与极致赛博表现
+        // ==========================================
+        private void CreateHoloBoard()
+        {
+            if (_holoBoardObj != null) return;
+
+            _holoBoardObj = new GameObject("BossHoloBoardUI");
+            Canvas c = _holoBoardObj.AddComponent<Canvas>();
+            c.renderMode = RenderMode.ScreenSpaceOverlay;
+            c.sortingOrder = 999;
+
+            // 1. 主背景 (带有高科技玻璃质感的深青色)
+            GameObject bgObj = new GameObject("DarkBG");
+            bgObj.transform.SetParent(_holoBoardObj.transform, false);
+            Image bg = bgObj.AddComponent<Image>();
+            bg.color = new Color(0.01f, 0.04f, 0.06f, 0.85f);
+            bgObj.AddComponent<RectMask2D>();
+            RectTransform bgRT = bg.rectTransform;
+            bgRT.anchorMin = new Vector2(0.5f, 0.5f);
+            bgRT.anchorMax = new Vector2(0.5f, 0.5f);
+            bgRT.sizeDelta = new Vector2(850, 240); // 稍微加高一点，留出灯条空间
+            bgRT.anchoredPosition = new Vector2(500, 0);
+
+            // 2. 顶部霓虹灯条 (青色)
+            GameObject topLineObj = new GameObject("TopLine");
+            topLineObj.transform.SetParent(bgObj.transform, false);
+            Image topLine = topLineObj.AddComponent<Image>();
+            topLine.color = new Color(0f, 1f, 1f, 0.8f);
+            RectTransform topRT = topLine.rectTransform;
+            topRT.anchorMin = new Vector2(0, 1);
+            topRT.anchorMax = new Vector2(1, 1);
+            topRT.offsetMin = new Vector2(0, -2); // 2 像素高
+            topRT.offsetMax = new Vector2(0, 0);
+
+            // 3. 底部霓虹灯条 (洋红/警告红)
+            GameObject botLineObj = new GameObject("BotLine");
+            botLineObj.transform.SetParent(bgObj.transform, false);
+            Image botLine = botLineObj.AddComponent<Image>();
+            botLine.color = new Color(1f, 0f, 0.3f, 0.8f);
+            RectTransform botRT = botLine.rectTransform;
+            botRT.anchorMin = new Vector2(0, 0);
+            botRT.anchorMax = new Vector2(1, 0);
+            botRT.offsetMin = new Vector2(0, 0);
+            botRT.offsetMax = new Vector2(0, 2);
+
+            // 4. 背景数字水印 (巨大但极其微弱的二进制乱码)
+            GameObject bgTextObj = new GameObject("Watermark");
+            bgTextObj.transform.SetParent(bgObj.transform, false);
+            TextMeshProUGUI bgText = bgTextObj.AddComponent<TextMeshProUGUI>();
+            bgText.alignment = TextAlignmentOptions.Center;
+            bgText.fontSize = 110;
+            bgText.color = new Color(0f, 1f, 1f, 0.04f); // 透明度只有极低的 4%
+            bgText.enableWordWrapping = false;
+            bgText.text = "01010110 01100010\n10100111 11010100";
+            RectTransform bgTextRT = bgText.rectTransform;
+            bgTextRT.anchorMin = Vector2.zero;
+            bgTextRT.anchorMax = Vector2.one;
+            bgTextRT.offsetMin = Vector2.zero;
+            bgTextRT.offsetMax = Vector2.zero;
+
+            // 5. 动态全息扫描线 (Scanline)
+            GameObject scanlineObj = new GameObject("Scanline");
+            scanlineObj.transform.SetParent(bgObj.transform, false);
+            Image scanline = scanlineObj.AddComponent<Image>();
+            scanline.color = new Color(0f, 1f, 1f, 0.15f); // 15%透明度的亮青线
+            _scanlineRT = scanline.rectTransform;
+            _scanlineRT.anchorMin = new Vector2(0, 1);
+            _scanlineRT.anchorMax = new Vector2(1, 1);
+            _scanlineRT.sizeDelta = new Vector2(0, 5); // 5像素高的线
+            _scanlineRT.anchoredPosition = new Vector2(0, 0);
+
+            // 6. 前景动态文字
+            GameObject txtObj = new GameObject("HoloText");
+            txtObj.transform.SetParent(bgObj.transform, false);
+            _holoBoardText = txtObj.AddComponent<TextMeshProUGUI>();
+            _holoBoardText.alignment = TextAlignmentOptions.TopLeft;
+            _holoBoardText.fontSize = 32;
+            _holoBoardText.enableWordWrapping = false;
+
+            RectTransform txtRT = _holoBoardText.rectTransform;
+            txtRT.anchorMin = Vector2.zero;
+            txtRT.anchorMax = Vector2.one;
+            txtRT.offsetMin = new Vector2(20, -20);
+            txtRT.offsetMax = new Vector2(-20, -20);
+        }
+
+        // 【新增】：平滑运行的扫描线动画协程
+        private IEnumerator AnimateScanline()
+        {
+            if (_scanlineRT == null) yield break;
+            float height = 240f; // UI底板高度
+            float speed = 180f;  // 扫描线每秒移动 180 像素
+            float currentY = 0f;
+
+            // 只要还在骇客状态，扫描线就会一直平滑扫描
+            while (_currentPhase == BossPhase.Phase2_HackingMinigame)
+            {
+                currentY -= speed * Time.unscaledDeltaTime;
+                if (currentY < -height) currentY = 0f; // 触底反弹回顶部
+
+                _scanlineRT.anchoredPosition = new Vector2(0, currentY);
+                yield return null;
+            }
+        }
+
+        // ... (HoloBoardPunch 和 GetArrowString 保持上个版本不变)
+
+        private IEnumerator HoloBoardPunch()
+        {
+            if (_holoBoardObj == null) yield break;
+            Transform bgTransform = _holoBoardObj.transform.GetChild(0);
+
+            float elapsed = 0f;
+            float duration = 0.15f;
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float scale = Mathf.Lerp(1.15f, 1f, elapsed / duration);
+                bgTransform.localScale = new Vector3(scale, scale, 1f);
+                yield return null;
+            }
+            bgTransform.localScale = Vector3.one;
+        }
+
+        private string GetArrowString(WheelDir dir)
+        {
+            switch (dir)
+            {
+                case WheelDir.Up: return "↑";
+                case WheelDir.Down: return "↓";
+                case WheelDir.Left: return "←";
+                case WheelDir.Right: return "→";
+            }
+            return "■";
+        }
+
+        // 【终极机制】：采用像素级绝对定位 (Absolute Positioning) 完美对齐
+        // 【终极机制】：采用像素级绝对定位 + 无缝启动过渡，彻底解决排版跳动！
+        private IEnumerator RollingHologramRoutine()
+        {
+            if (_holoBoardText == null) yield break;
+
+            string[] hexChars = new string[] { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F" };
+
+            // 引入一个启动计时器，用来替代之前会导致排版跳动的 yield return
+            float bootTime = 0.25f;
+
+            while (_currentPhase == BossPhase.Phase2_HackingMinigame)
+            {
+                if (_holoBoardText != null)
+                {
+                    string seqLine = "";
+                    string hexLine = "";
+
+                    // 每一帧都老老实实把两排文字画出来，保持物理高度绝对一致！
+                    for (int i = 0; i < P2_SequenceLength; i++)
+                    {
+                        string randomHex = hexChars[Random.Range(0, 16)] + hexChars[Random.Range(0, 16)];
+                        int basePos = 60 + (i * 190);
+                        int hexOffset = 40;
+
+                        if (bootTime > 0)
+                        {
+                            // 启动阶段：全都是明灰色的乱码，营造系统正在接管的视觉
+                            WheelDir randomDir = (WheelDir)Random.Range(1, 5);
+                            seqLine += $"<pos={basePos}><color=#889999>[ {GetArrowString(randomDir)} ]</color>";
+                            hexLine += $"<pos={basePos + hexOffset}><color=#889999>{randomHex}</color>";
+                        }
+                        else if (i < _p2CurrentSeqIndex)
+                        {
+                            seqLine += $"<pos={basePos}><color=#00FF00>[ OK ]</color>";
+                            hexLine += $"<pos={basePos + hexOffset}><color=#00FF00>{randomHex}</color>";
+                        }
+                        else if (i == _p2CurrentSeqIndex)
+                        {
+                            seqLine += $"<pos={basePos}><color=#00FFFF>[ {GetArrowString(_p2Sequence[i])} ]</color>";
+                            hexLine += $"<pos={basePos + hexOffset}><color=#00FFFF>{randomHex}</color>";
+                        }
+                        else
+                        {
+                            // 【修复】：未激活的颜色从暗灰 #444444 提亮到科技灰 #889999！
+                            WheelDir randomDir = (WheelDir)Random.Range(1, 5);
+                            seqLine += $"<pos={basePos}><color=#889999>[ {GetArrowString(randomDir)} ]</color>";
+                            hexLine += $"<pos={basePos + hexOffset}><color=#889999>{randomHex}</color>";
+                        }
+                    }
+
+                    string uiText = "";
+
+                    if (bootTime > 0)
+                    {
+                        // 启动头 0.25 秒，只显示红色的警告标题，但排版行数与下方严格一致！
+                        uiText += $"<align=center><color=red><b>[ INITIALIZING OVERRIDE... ]</b></color>\n";
+                        uiText += $"<size=20>ESTABLISHING CONNECTION...</size></align>\n\n";
+                        bootTime -= 0.05f;
+                    }
+                    else
+                    {
+                        // 正常骇客状态标题
+                        uiText += $"<align=center><color=#FF0055><b>/// FIREWALL BYPASS ///</b></color>\n";
+                        uiText += $"<size=20>UPLINK TIME: {_p2HackTimer:F1}s</size></align>\n\n";
+                    }
+
+                    // 把底部永远稳定的两排符号贴上去
+                    uiText += $"<align=left><size=55>{seqLine}</size>\n";
+                    uiText += $"<size=22>{hexLine}</size></align>";
+
+                    _holoBoardText.text = uiText;
+                }
+
+                yield return new WaitForSecondsRealtime(0.05f);
+            }
+        }
+
+        // ==========================================
+        // 【新增】：生成极致赛博朋克风的“错位残影” (Glitch Afterimage)
+        // ==========================================
         private IEnumerator BossStunRoutine()
         {
             _currentPhase = BossPhase.Phase2_Stunned;
@@ -1252,31 +1651,193 @@ namespace TheGlitch
 
             if (allHacked)
             {
-                // 【绝杀】：最后一根柱子被黑，直接跳入最终升空处决动画！
                 RawCameraShake.Shake(1.2f, 0.8f);
                 StartCoroutine(TransitionToPhase3());
-                yield break; // 后面的宕机代码不跑了
-            }
-            else
-            {
-                RawCameraShake.Shake(0.3f, 0.2f);
+                yield break;
             }
 
+            // ==========================================
+            // 【神级特写演出】：子弹时间宕机特写
+            // ==========================================
+            DisablePlayerAbilities(true);
+
+            // 触发 0.2倍速 的极致子弹时间
+            Time.timeScale = 0.2f;
+
+            CinemachineBlendDefinition oldBlend = default;
+            if (_mainCameraBrain != null)
+            {
+                oldBlend = _mainCameraBrain.DefaultBlend;
+                _mainCameraBrain.DefaultBlend = default;
+            }
+
+            if (QTE_CloseUpCamera != null && BossCore != null)
+            {
+                QTE_CloseUpCamera.gameObject.SetActive(true);
+                QTE_CloseUpCamera.transform.position = BossCore.position + new Vector3(2f, 3f, -4f);
+                QTE_CloseUpCamera.transform.LookAt(BossCore);
+                QTE_CloseUpCamera.Lens.Dutch = Random.Range(-15f, 15f);
+                QTE_CloseUpCamera.Priority = 200;
+            }
+
+            Vector2 originalPromptPos = Vector2.zero;
+            if (QTE_PromptTextUI != null)
+            {
+                RectTransform rt = QTE_PromptTextUI.GetComponent<RectTransform>();
+                if (rt != null)
+                {
+                    originalPromptPos = rt.anchoredPosition;
+                    rt.anchoredPosition = originalPromptPos + new Vector2(0, 300);
+                }
+            }
+
+            ShowQTEPrompt("<line-height=120%><color=red><size=60><b>[ CRITICAL ERROR ]</b></size>\n<size=35>SYSTEM REBOOTING...</size></color></line-height>");
+
+            // ==========================================
+            // 【修改 1】：拉长表现时间！现实中的 2.5 秒，让你看个爽！
             Vector3 originalCorePos = BossCore.position;
-            float spasmTime = 1f;
+            float spasmTime = 2.5f;
+            float ghostTimer = 0f;
+
             while (spasmTime > 0)
             {
-                spasmTime -= Time.deltaTime;
-                BossCore.position = originalCorePos + (Random.insideUnitSphere * 0.3f);
+                spasmTime -= Time.unscaledDeltaTime;
+                ghostTimer -= Time.unscaledDeltaTime;
+
+                // 每 0.15 秒爆发一次皮筋残影！
+                if (ghostTimer <= 0f)
+                {
+                    ghostTimer = 0.15f;
+                    // 【修改 2】：不再传入旧材质，里面会自动生成原生的高亮材质
+                    StartCoroutine(SpawnAfterimageRoutine(BossCore));
+                    RawCameraShake.Shake(0.4f, 0.05f);
+                }
+
+                BossCore.position = originalCorePos + (Random.insideUnitSphere * 0.05f);
                 yield return null;
             }
+            // ==========================================
+
             BossCore.position = originalCorePos;
 
-            yield return new WaitForSeconds(P2_StunDuration - 1f);
+            // 杀毒完毕，世界恢复正常
+            Time.timeScale = 1f;
 
-            _p2StateTimer = 1.5f;
+            if (QTE_PromptTextUI != null)
+            {
+                RectTransform rt = QTE_PromptTextUI.GetComponent<RectTransform>();
+                if (rt != null) rt.anchoredPosition = originalPromptPos;
+            }
+
+            HideQTEPrompt();
+
+            if (QTE_CloseUpCamera != null)
+            {
+                QTE_CloseUpCamera.Priority = 0;
+                QTE_CloseUpCamera.Lens.Dutch = 0f;
+            }
+
+            if (_mainCameraBrain != null)
+                _mainCameraBrain.DefaultBlend = oldBlend;
+
+            DisablePlayerAbilities(false);
+
+            _p2StateTimer = 1.0f;
             _currentPhase = BossPhase.Phase2_Idle;
             Debug.Log("【重启】Boss 杀毒完毕，开始下一轮扫描！");
+        }
+
+
+        // ==========================================
+        // 【新增】：“皮筋拖拽式”残影生成器 (Elastic Glitch Afterimage)
+        // ==========================================
+        private IEnumerator SpawnAfterimageRoutine(Transform target)
+        {
+            if (target == null) yield break;
+
+            Renderer[] renderers = target.GetComponentsInChildren<Renderer>();
+            System.Collections.Generic.List<GameObject> ghosts = new System.Collections.Generic.List<GameObject>();
+            System.Collections.Generic.List<Mesh> bakedMeshes = new System.Collections.Generic.List<Mesh>();
+
+            // 记录初始位置和拖拽的目标位置
+            System.Collections.Generic.List<Vector3> startPositions = new System.Collections.Generic.List<Vector3>();
+            System.Collections.Generic.List<Vector3> pullTargetPositions = new System.Collections.Generic.List<Vector3>();
+
+            // 【修改 3】：完全抛弃旧材质，用代码凭空捏一个兼容性极强、自带发光的纯色渲染器
+            Shader defaultShader = Shader.Find("Sprites/Default");
+            if (defaultShader == null) defaultShader = Shader.Find("Unlit/Transparent");
+
+            // 这一次的拖拽方向和距离（离得近一点，在 0.3 到 0.8 米之间随机）
+            Vector3 pullOffset = Random.onUnitSphere * Random.Range(0.3f, 0.8f);
+
+            foreach (Renderer r in renderers)
+            {
+                if (r.gameObject.activeInHierarchy && r.enabled)
+                {
+                    Mesh meshToDraw = null;
+                    if (r is MeshRenderer && r.GetComponent<MeshFilter>() != null)
+                        meshToDraw = r.GetComponent<MeshFilter>().mesh;
+                    else if (r is SkinnedMeshRenderer)
+                    {
+                        meshToDraw = new Mesh();
+                        ((SkinnedMeshRenderer)r).BakeMesh(meshToDraw);
+                        bakedMeshes.Add(meshToDraw);
+                    }
+
+                    if (meshToDraw != null)
+                    {
+                        GameObject ghost = new GameObject("GlitchGhost");
+                        ghost.transform.position = r.transform.position;
+                        ghost.transform.rotation = r.transform.rotation;
+                        ghost.transform.localScale = r.transform.lossyScale * 1.02f; // 只比原版大一丝丝，显得更紧凑
+
+                        MeshFilter mf = ghost.AddComponent<MeshFilter>();
+                        mf.mesh = meshToDraw;
+                        MeshRenderer mr = ghost.AddComponent<MeshRenderer>();
+
+                        // 赋予纯代码捏造的赛博故障色 (青色或洋红)
+                        Material mat = new Material(defaultShader);
+                        Color glitchColor = Random.value > 0.5f ? new Color(0f, 1f, 1f, 0.6f) : new Color(1f, 0f, 0.5f, 0.6f);
+                        mat.color = glitchColor;
+                        mr.material = mat;
+
+                        ghosts.Add(ghost);
+                        startPositions.Add(r.transform.position);
+                        pullTargetPositions.Add(r.transform.position + pullOffset);
+                    }
+                }
+            }
+
+            // 皮筋拖拽动画的时间 (0.3秒完成：拉出 -> 弹回)
+            float lifeTime = 0.3f;
+            float t = 0;
+            while (t < lifeTime)
+            {
+                t += Time.unscaledDeltaTime;
+                float progress = t / lifeTime;
+
+                // 【核心灵魂】：使用正弦波 (Sine Wave) 实现拉出又弹回的皮筋效果！
+                // 当 progress 从 0 涨到 1 时，Mathf.Sin 刚好画出一个 0 -> 1 -> 0 的完美拱形圆弧！
+                float elasticPull = Mathf.Sin(progress * Mathf.PI);
+
+                for (int i = 0; i < ghosts.Count; i++)
+                {
+                    if (ghosts[i] != null)
+                    {
+                        // 根据正弦波，把残影拉向偏移点，然后再拉回原点！
+                        ghosts[i].transform.position = Vector3.Lerp(startPositions[i], pullTargetPositions[i], elasticPull);
+
+                        // 在弹回的后半段，渐渐消失隐形
+                        Color c = ghosts[i].GetComponent<Renderer>().material.color;
+                        c.a = Mathf.Lerp(0.6f, 0f, progress * progress);
+                        ghosts[i].GetComponent<Renderer>().material.color = c;
+                    }
+                }
+                yield return null;
+            }
+
+            foreach (GameObject g in ghosts) if (g != null) Destroy(g);
+            foreach (Mesh m in bakedMeshes) if (m != null) Destroy(m);
         }
 
         private void ChangePillarMaterial(int index, Material mat)
@@ -1370,7 +1931,16 @@ namespace TheGlitch
                     }
 
                     // ==========================================
-                    // 【新增】：黑屏瞬间把第二阶段的柱子全部隐藏，清理战场！
+                    // 【神级细节】：黑屏瞬间直接让主角进入挣扎姿态！
+                    if (_playerAnimator != null)
+                    {
+                        _playerAnimator.enabled = true;
+                        _playerAnimator.Play("StruggleWalk", 0, 0f);
+                        _playerAnimator.speed = 0f; // 暂停在挣扎的第一帧，等待玩家按 A/D 键发力！
+                    }
+                    // ==========================================
+
+                    // 黑屏瞬间把第二阶段的柱子全部隐藏，清理战场！
                     if (P2_Pillars != null)
                     {
                         foreach (GameObject pillar in P2_Pillars)
@@ -1378,7 +1948,6 @@ namespace TheGlitch
                             if (pillar != null) pillar.SetActive(false);
                         }
                     }
-                    // ==========================================
                 });
                 yield return new WaitForSeconds(1.0f);
             }

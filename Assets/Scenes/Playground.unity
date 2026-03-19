@@ -43901,7 +43901,7 @@ MonoBehaviour:
   Phase1_BGM: {fileID: 8300000, guid: 430f0e62b038f7847bd71e470056f792, type: 3}
   Phase2_BGM: {fileID: 8300000, guid: 4259de8e58d53d047b1e9507548ff224, type: 3}
   BGMFadeDuration: 1.5
-  MaxBGMVolume: 0.2
+  MaxBGMVolume: 0.05
   AoEWarningPrefab: {fileID: 5305590569417893262, guid: ccf0ddf454011ba46977f1cfeaad31f7, type: 3}
   BombLocations:
   - {fileID: 1706228717}
@@ -43954,8 +43954,8 @@ MonoBehaviour:
   - {fileID: 359577641}
   - {fileID: 520339895}
   - {fileID: 156205724}
-  PillarRiseHeight: 1.96
-  PillarRiseDuration: 4
+  PillarRiseHeight: 4
+  PillarRiseDuration: 4.5
   P2_DynamicLockCamera: {fileID: 1858949827}
   BossCore: {fileID: 1336300091}
   P2_LaserRenderer: {fileID: 654343708}
@@ -43972,6 +43972,11 @@ MonoBehaviour:
   P2_HackRange: 4
   P2_HackTimeRequired: 2
   P2_StunDuration: 5
+  HackDeadZone: 35
+  HackMaxRadius: 120
+  BossHackWheel: {fileID: 1382942124}
+  P2_SequenceLength: 4
+  P2_HackTimeLimit: 10
   P3_PlayerStartPos: {fileID: 963161978}
   GlobalWindParticles: {fileID: 1312356821}
   CoreEnergyParticles: {fileID: 960603509}
@@ -113053,7 +113058,7 @@ ParticleSystemRenderer:
   m_MaxParticleSize: 0.5
   m_CameraVelocityScale: 0
   m_VelocityScale: 0
-  m_LengthScale: 4
+  m_LengthScale: 8
   m_SortingFudge: 0
   m_NormalDirection: 1
   m_ShadowBias: 0
@@ -113085,7 +113090,7 @@ ParticleSystem:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1034481374}
   serializedVersion: 8
-  lengthInSec: 5
+  lengthInSec: 3
   simulationSpeed: 1
   stopAction: 0
   cullingMode: 0
@@ -113160,7 +113165,7 @@ ParticleSystem:
     startLifetime:
       serializedVersion: 2
       minMaxState: 3
-      scalar: 0.8
+      scalar: 0.5
       minScalar: 0.4
       maxCurve:
         serializedVersion: 2
@@ -113331,8 +113336,8 @@ ParticleSystem:
     startSize:
       serializedVersion: 2
       minMaxState: 3
-      scalar: 0.2
-      minScalar: 0.1
+      scalar: 0.8
+      minScalar: 0.3
       maxCurve:
         serializedVersion: 2
         m_Curve:
