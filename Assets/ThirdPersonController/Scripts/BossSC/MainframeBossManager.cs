@@ -16,11 +16,10 @@ namespace TheGlitch
 
     public class MainframeBossManager : MonoBehaviour
     {
-        // 【核心修改】：加入了第三阶段的所有电影化互动状态！
         private enum BossPhase
         {
             Waiting, Intro, P1_Dodging, P1_QTE, Transitioning,
-            Phase2_Idle, Phase2_LaserAiming, Phase2_LaserFiring, Phase2_HackingMinigame, Phase2_Stunned, // <--- 这里加了 Phase2_HackingMinigame
+            Phase2_Idle, Phase2_LaserAiming, Phase2_LaserFiring, Phase2_HackingMinigame, Phase2_Stunned,
             Phase3_Cinematic, Phase3_Walk1, Phase3_Walk2, Phase3_Walk3, Phase3_Execution, Dead
         }
         private BossPhase _currentPhase = BossPhase.Waiting;
@@ -51,12 +50,14 @@ namespace TheGlitch
         private int _currentBgmSourceIndex = 0;
         private Coroutine _bgmCrossfadeRoutine;
 
-        [Header("第一阶段：系统清洗 (静态红圈)")]
+        [Header("第一阶段：系统清洗 (追踪矩阵)")]
         public GameObject AoEWarningPrefab;
         public Transform[] BombLocations;
-        public float WarningTime = 1.5f;
+        public float WarningTime = 4.0f;
+        [Range(1f, 15f)] public float AoETrackingSpeed = 4.0f;
+
         public int BombRounds = 3;
-        public int BombsPerRound = 3;
+        public int BombsPerRound = 4;
         public float BombRadius = 2.2f;
         public int BombDamage = 1;
 
@@ -76,11 +77,22 @@ namespace TheGlitch
         [Range(0.1f, 2f)] public float ProjectileFireRate = 0.4f;
         [Range(1f, 20f)] public float ProjectileSpeed = 10f;
 
-        [Header("P1 QTE：狂按突破")]
+        [Header("P1 骇客小游戏：数据吞噬 (Pac-Man)")]
         public float P1_QTESlowMo = 0.08f;
-        public float P1_GaugeMax = 100f;
-        public float P1_GaugeDrainPerSecond = 20f;
-        public float P1_GaugeGainPerPress = 15f;
+        public float P1_HackTimeLimit = 12.0f;
+        public int P1_FoodRequired = 5;
+        public float P1_SnakeMoveInterval = 0.15f;
+
+        private Vector2Int _p1SnakePos;
+        private Vector2Int _p1FoodPos;
+        private WheelDir _p1SnakeDir;
+        private int _p1FoodCollected;
+        private float _p1HackTimer;
+        private float _p1SnakeMoveTimer;
+        private int _p1GridWidth = 14;
+        private int _p1GridHeight = 5;
+        private System.Collections.Generic.List<Vector2Int> _p1SnakeHistory = new System.Collections.Generic.List<Vector2Int>();
+        private System.Collections.Generic.List<Vector2Int> _p1EatenPositions = new System.Collections.Generic.List<Vector2Int>();
 
         [Header("第二阶段：演出 1 - 护甲掉落")]
         public P2_StageSet Phase2Settings;
@@ -101,7 +113,7 @@ namespace TheGlitch
 
         [Header("--- 死亡扫描激光设置 ---")]
         public LineRenderer P2_LaserRenderer;
-        public ParticleSystem LaserChargeFX; // <--- 新增的蓄力吸收粒子
+        public ParticleSystem LaserChargeFX;
         public float P2_LaserAimTime = 3f;
         public float P2_LaserFireTime = 0.15f;
         public float P2_LaserCooldown = 2f;
@@ -119,18 +131,13 @@ namespace TheGlitch
         private enum PillarState { Normal, Exposed, Hacked }
         private PillarState[] _pillarStates;
         private float _p2HackGauge = 0f;
-        // ==========================================
-        // 【新增】：二阶段骇客输入控制 (完美复用 HackWheel 手感)
-        // ==========================================
-    
 
         [Header("--- 骇客输入控制 ---")]
         public float HackDeadZone = 35f;
         public float HackMaxRadius = 120f;
-        private Vector2 _hackAccum;
 
         [Header("--- 骇客轮盘 UI 引用 ---")]
-        public HackWheelUI BossHackWheel; // <--- 拖入你场景里的骇客轮盘
+        public HackWheelUI BossHackWheel;
 
         [Header("P2 序列记忆破解 (全息投影)")]
         public int P2_SequenceLength = 4;
@@ -141,41 +148,30 @@ namespace TheGlitch
         private WheelDir _p2LastInput = WheelDir.None;
         private float _p2HackTimer = 0f;
         private float _p2InputCooldownTimer = 0f;
+        private GameObject _holoBoardObj;
+        private TextMeshProUGUI _holoBoardText;
+        private RectTransform _scanlineRT;
 
-        // ==========================================
-        // 【新增】：第三阶段 电影化终极处决运镜
-        // ==========================================
         [Header("第三阶段：终极处决演出")]
-        [Tooltip("P3开始时，玩家被强行拉回的起始位置（建议离核心远一点）")]
-        public Transform P3_PlayerStartPos;  // <--- 【加上这一行】
-        [Header("第三阶段：风暴粒子特效")]
-        [Tooltip("四周狂乱飞舞的狂风/速度线特效")]
+        public Transform P3_PlayerStartPos;
         public ParticleSystem GlobalWindParticles;
-        [Tooltip("核心向外喷射的能量粒子")]
         public ParticleSystem CoreEnergyParticles;
 
-        [Tooltip("看核心升空发波的专属相机")]
         public CinemachineCamera P3_CoreAscendCamera;
-        [Tooltip("核心最终悬浮的位置")]
         public Transform P3_CoreAscendPos;
 
         [Space(10)]
         public CinemachineCamera P3_WalkCamera_1;
-        [Tooltip("按第一次 E 后玩家走到的位置")]
         public Transform P3_WalkTarget_1;
 
         public CinemachineCamera P3_WalkCamera_2;
-        [Tooltip("按第二次 E 后玩家走到的位置")]
         public Transform P3_WalkTarget_2;
 
         public CinemachineCamera P3_WalkCamera_3;
-        [Tooltip("按第三次 E 后玩家走到的核心脚下位置")]
         public Transform P3_WalkTarget_3;
 
         [Space(10)]
-        [Tooltip("最后处决时的特写相机")]
         public CinemachineCamera P3_ExecutionCamera;
-        [Tooltip("需要长按 E 多少秒才能彻底销毁")]
         public float P3_ExecutionTimeRequired = 3.0f;
 
         [Header("UI 设置")]
@@ -183,18 +179,14 @@ namespace TheGlitch
         public GameObject QTE_PromptTextUI;
         public TextMeshProUGUI QTE_TextComponent;
         public Slider QTE_ProgressBar;
-        [Tooltip("长按E时的能量虹吸特效")]
         public ParticleSystem SiphonParticles;
 
-        [Tooltip("你刚做的声波圆柱材质")]
-        public Material PulseWaveMat; // <--- 加上这一行
-        // 用于实时追踪电磁波的物理半径
+        public Material PulseWaveMat;
         private float _currentPulseRadius = -1f;
         private bool _pulseHandledThisRound = false;
 
         private Material[] _wpOriginalMats;
         private int _currentWeakPointIndex = 0;
-        private float _p1Gauge = 0f;
 
         private Vector3 _qteUIPromptOriginalScale;
         private Vector3 _qteUIBarOriginalScale;
@@ -202,16 +194,26 @@ namespace TheGlitch
         private Vector3 _currentUIBarScale;
 
         private Transform _dynamicCamAnchor;
+        private Transform _uiTargetAnchor;
 
         private float _p2StateTimer = 0f;
         private Vector3 _lockedLaserTargetPos;
         private bool _hasLaserDamagedPlayer = false;
 
+        private Vector3 _p1ArenaCenter;
+        private Quaternion _p1ArenaRot;
+
+        private Vector3 _doorStartPos;
+        private Vector3 _coreStartPos;
+        private Vector3[] _pillarStartPos;
+        private Rigidbody[] _armorRbs;
+        private Vector3[] _armorStartPos;
+        private Quaternion[] _armorStartRot;
+
+        private CinemachineBlendDefinition _initialCameraBlend;
+
         private void Awake()
         {
-            if (P1_GaugeDrainPerSecond <= 0f) P1_GaugeDrainPerSecond = 20f;
-            if (P1_GaugeGainPerPress <= 0f) P1_GaugeGainPerPress = 15f;
-
             for (int i = 0; i < 2; i++)
             {
                 _bgmSources[i] = gameObject.AddComponent<AudioSource>();
@@ -233,7 +235,8 @@ namespace TheGlitch
             if (Camera.main != null) _mainCameraBrain = Camera.main.GetComponent<CinemachineBrain>();
             if (_mainCameraBrain == null) _mainCameraBrain = Object.FindFirstObjectByType<CinemachineBrain>();
 
-            // 初始化所有相机权限
+            if (_mainCameraBrain != null) _initialCameraBlend = _mainCameraBrain.DefaultBlend;
+
             if (IntroDoorCamera) IntroDoorCamera.Priority = 0;
             if (P1_TopCamera) P1_TopCamera.Priority = 10;
             if (QTE_CloseUpCamera) QTE_CloseUpCamera.Priority = 0;
@@ -249,14 +252,48 @@ namespace TheGlitch
             _dynamicCamAnchor = new GameObject("DynamicQTECamAnchor").transform;
             _dynamicCamAnchor.SetParent(this.transform);
 
+            _uiTargetAnchor = new GameObject("UITargetAnchor").transform;
+            _uiTargetAnchor.SetParent(this.transform);
+
             if (P2_LaserRenderer != null) P2_LaserRenderer.gameObject.SetActive(false);
 
             Time.timeScale = 1f;
+
+            if (BossDoor) _doorStartPos = BossDoor.transform.position;
+            if (BossCore) _coreStartPos = BossCore.position;
+
+            if (P2_Pillars != null)
+            {
+                _pillarStartPos = new Vector3[P2_Pillars.Length];
+                for (int i = 0; i < P2_Pillars.Length; i++)
+                {
+                    if (P2_Pillars[i]) _pillarStartPos[i] = P2_Pillars[i].transform.position;
+                }
+            }
+
+            if (BossArmorParent)
+            {
+                _armorRbs = BossArmorParent.GetComponentsInChildren<Rigidbody>();
+                _armorStartPos = new Vector3[_armorRbs.Length];
+                _armorStartRot = new Quaternion[_armorRbs.Length];
+                for (int i = 0; i < _armorRbs.Length; i++)
+                {
+                    _armorStartPos[i] = _armorRbs[i].transform.localPosition;
+                    _armorStartRot[i] = _armorRbs[i].transform.localRotation;
+                    _armorRbs[i].isKinematic = true;
+                }
+            }
         }
 
         private void OnDisable() => Time.timeScale = 1f;
-     
-      
+
+        private IEnumerator RestoreBlendNextFrame(CinemachineBlendDefinition blend)
+        {
+            yield return new WaitForEndOfFrame();
+            yield return new WaitForEndOfFrame();
+            if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = blend;
+        }
+
         private void InitUI()
         {
             if (WarningTextUI) WarningTextUI.SetActive(false);
@@ -290,6 +327,11 @@ namespace TheGlitch
             _currentPhase = BossPhase.Intro;
 
             _player = other.transform.root.gameObject;
+
+            _p1ArenaCenter = _player.transform.position + _player.transform.forward * 8f;
+            _p1ArenaCenter.y = Phase2Settings != null && Phase2Settings.PlayerStage != null ? Phase2Settings.PlayerStage.position.y : _player.transform.position.y;
+            _p1ArenaRot = _player.transform.rotation;
+
             _playerLife = _player.GetComponent<SimplePlayerLife>();
             if (_playerLife != null) _playerLife.IsInBossRoom = true;
 
@@ -354,9 +396,6 @@ namespace TheGlitch
             _currentBgmSourceIndex = nextIndex;
         }
 
-        // =====================================
-        // 【把下面这段补回来！】
-        // =====================================
         private void StopAllBGM()
         {
             if (_bgmCrossfadeRoutine != null) StopCoroutine(_bgmCrossfadeRoutine);
@@ -380,15 +419,58 @@ namespace TheGlitch
             _bgmSources[0].Stop();
             _bgmSources[1].Stop();
         }
-        // =====================================
         #endregion
 
-        #region Intro + Phase 1 (省略不必要的内容，保持不变)
+        private IEnumerator PlayCRTWarning(string top, string mid, string bot, float duration)
+        {
+            if (QTE_PromptTextUI == null || QTE_TextComponent == null) yield break;
+
+            Vector2 originalPromptPos = QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition;
+
+            QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition = originalPromptPos + new Vector2(0, 300);
+
+            QTE_PromptTextUI.SetActive(true);
+            QTE_TextComponent.text = $"<color=red><size=30>{top}</size>\n<size=65><b>{mid}</b></size>\n<size=25>{bot}</size></color>";
+
+            float crtTime = 0f;
+            while (crtTime < 0.15f)
+            {
+                crtTime += Time.unscaledDeltaTime;
+                float y = Mathf.Lerp(0.02f, 1f, crtTime / 0.15f);
+                QTE_PromptTextUI.transform.localScale = new Vector3(_qteUIPromptOriginalScale.x, y * _qteUIPromptOriginalScale.y, _qteUIPromptOriginalScale.z);
+                yield return null;
+            }
+            QTE_PromptTextUI.transform.localScale = _qteUIPromptOriginalScale;
+
+            yield return new WaitForSeconds(duration);
+
+            crtTime = 0f;
+            while (crtTime < 0.1f)
+            {
+                crtTime += Time.unscaledDeltaTime;
+                float y = Mathf.Lerp(1f, 0.02f, crtTime / 0.1f);
+                QTE_PromptTextUI.transform.localScale = new Vector3(_qteUIPromptOriginalScale.x, y * _qteUIPromptOriginalScale.y, _qteUIPromptOriginalScale.z);
+                yield return null;
+            }
+
+            crtTime = 0f;
+            while (crtTime < 0.1f)
+            {
+                crtTime += Time.unscaledDeltaTime;
+                float x = Mathf.Lerp(1f, 0f, crtTime / 0.1f);
+                QTE_PromptTextUI.transform.localScale = new Vector3(x * _qteUIPromptOriginalScale.x, 0.02f * _qteUIPromptOriginalScale.y, _qteUIPromptOriginalScale.z);
+                yield return null;
+            }
+
+            QTE_PromptTextUI.SetActive(false);
+
+            QTE_PromptTextUI.transform.localScale = _qteUIPromptOriginalScale;
+            QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition = originalPromptPos;
+        }
+
+        #region Intro + Phase 1 
         private IEnumerator IntroRoutine()
         {
-            CinemachineBlendDefinition oldBlend = default;
-            if (_mainCameraBrain != null) oldBlend = _mainCameraBrain.DefaultBlend;
-
             if (BossDoor != null && DoorClosedPos != null)
             {
                 if (ScreenFader.Instance != null)
@@ -396,21 +478,27 @@ namespace TheGlitch
                     ScreenFader.Instance.DoFadeAndAction(() =>
                     {
                         PlayBGM(Phase1_BGM);
-                        if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                        if (_mainCameraBrain != null)
+                        {
+                            _mainCameraBrain.DefaultBlend = default;
+                            StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                        }
                         if (IntroDoorCamera != null) IntroDoorCamera.Priority = 200;
                         if (P1_TopCamera != null) P1_TopCamera.Priority = 0;
                     });
                     yield return new WaitForSeconds(1.0f);
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
                 }
                 else
                 {
                     PlayBGM(Phase1_BGM);
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
                     if (IntroDoorCamera != null) IntroDoorCamera.Priority = 200;
                     if (P1_TopCamera != null) P1_TopCamera.Priority = 0;
                     yield return new WaitForSeconds(0.5f);
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
                 }
 
                 yield return StartCoroutine(AnimateDoorClosing());
@@ -420,28 +508,153 @@ namespace TheGlitch
                 {
                     ScreenFader.Instance.DoFadeAndAction(() =>
                     {
-                        if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                        if (_mainCameraBrain != null)
+                        {
+                            _mainCameraBrain.DefaultBlend = default;
+                            StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                        }
                         if (IntroDoorCamera != null) IntroDoorCamera.Priority = 0;
                         if (P1_TopCamera != null) P1_TopCamera.Priority = 100;
                         if (_playerLife != null) _playerLife.ShowPlayerHealthBar();
                     });
                     yield return new WaitForSeconds(1.0f);
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
                 }
             }
             else
             {
                 PlayBGM(Phase1_BGM);
-                if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                if (_mainCameraBrain != null)
+                {
+                    _mainCameraBrain.DefaultBlend = default;
+                    StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                }
                 if (P1_TopCamera) P1_TopCamera.Priority = 100;
                 if (_playerLife != null) _playerLife.ShowPlayerHealthBar();
                 yield return new WaitForSeconds(0.5f);
-                if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
             }
 
-            if (WarningTextUI) WarningTextUI.SetActive(true);
-            yield return new WaitForSeconds(2.0f);
-            if (WarningTextUI) WarningTextUI.SetActive(false);
+            yield return StartCoroutine(PlayCRTWarning("/// SECURITY BREACH DETECTED ///", "[ INTRUDER ALERT ]", "INITIATING PURGE PROTOCOL...", 2.0f));
+
+            DisablePlayerAbilities(false);
+            StartCoroutine(P1_DodgingRoutine());
+        }
+
+        public void SoftResetBoss(GameObject playerObj)
+        {
+            StopAllCoroutines();
+
+            _currentPhase = BossPhase.Intro;
+
+            _currentWeakPointIndex = 0;
+            _p1HackTimer = 0f;
+            _p1FoodCollected = 0;
+            _p2HackGauge = 0f;
+            _p2StateTimer = 0f;
+            _hasLaserDamagedPlayer = false;
+
+            if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = _initialCameraBlend;
+
+            CharacterController cc = playerObj.GetComponent<CharacterController>();
+            if (cc != null) cc.enabled = false;
+            playerObj.transform.position = _p1ArenaCenter + Vector3.up * 0.1f;
+            playerObj.transform.rotation = _p1ArenaRot;
+            if (cc != null) cc.enabled = true;
+
+            if (BossDoor && DoorClosedPos) BossDoor.transform.position = DoorClosedPos.position;
+            if (BossCore) BossCore.position = _coreStartPos;
+
+            if (BossArmorParent)
+            {
+                BossArmorParent.SetActive(true);
+                for (int i = 0; i < _armorRbs.Length; i++)
+                {
+                    if (_armorRbs[i])
+                    {
+                        _armorRbs[i].isKinematic = true;
+                        _armorRbs[i].useGravity = false;
+                        _armorRbs[i].transform.localPosition = _armorStartPos[i];
+                        _armorRbs[i].transform.localRotation = _armorStartRot[i];
+                    }
+                }
+            }
+
+            if (P1_WeakPoints != null)
+            {
+                for (int i = 0; i < P1_WeakPoints.Length; i++)
+                {
+                    if (P1_WeakPoints[i]) P1_WeakPoints[i].SetActive(true);
+                    Renderer r = GetWeakPointRenderer(i);
+                    if (r != null && _wpOriginalMats != null && _wpOriginalMats[i] != null)
+                        r.material = _wpOriginalMats[i];
+                }
+            }
+
+            if (P2_Pillars != null && _pillarStates != null)
+            {
+                for (int i = 0; i < P2_Pillars.Length; i++)
+                {
+                    _pillarStates[i] = PillarState.Normal;
+                    ChangePillarMaterial(i, PillarNormalMat);
+                    if (P2_Pillars[i]) P2_Pillars[i].transform.position = _pillarStartPos[i];
+                }
+            }
+
+            var projectiles = Object.FindObjectsByType<BossProjectile>(FindObjectsSortMode.None);
+            foreach (var p in projectiles) Destroy(p.gameObject);
+
+            if (AoEWarningPrefab)
+            {
+                var allObjs = Object.FindObjectsByType<GameObject>(FindObjectsSortMode.None);
+                foreach (var obj in allObjs)
+                {
+                    if (obj.name.Contains(AoEWarningPrefab.name)) Destroy(obj);
+                }
+            }
+
+            if (P2_LaserRenderer) P2_LaserRenderer.gameObject.SetActive(false);
+            if (LaserChargeFX) LaserChargeFX.Stop();
+            if (GlobalWindParticles) GlobalWindParticles.Stop();
+            if (CoreEnergyParticles) CoreEnergyParticles.Stop();
+            if (SiphonParticles) SiphonParticles.Stop();
+
+            InitUI();
+            HideQTEPrompt();
+            if (_holoBoardObj) _holoBoardObj.SetActive(false);
+            if (BossHackWheel) BossHackWheel.Close();
+
+            StartCoroutine(RetryIntroRoutine());
+        }
+
+        private IEnumerator RetryIntroRoutine()
+        {
+            _currentPhase = BossPhase.Intro;
+
+            if (IntroDoorCamera) IntroDoorCamera.Priority = 0;
+            if (QTE_CloseUpCamera) QTE_CloseUpCamera.Priority = 0;
+            if (P2_ArmorDropCamera) P2_ArmorDropCamera.Priority = 0;
+            if (P2_PillarPanCamera) P2_PillarPanCamera.Priority = 0;
+            if (P2_DynamicLockCamera) P2_DynamicLockCamera.Priority = 0;
+            if (P3_CoreAscendCamera) P3_CoreAscendCamera.Priority = 0;
+            if (P3_WalkCamera_1) P3_WalkCamera_1.Priority = 0;
+            if (P3_WalkCamera_2) P3_WalkCamera_2.Priority = 0;
+            if (P3_WalkCamera_3) P3_WalkCamera_3.Priority = 0;
+            if (P3_ExecutionCamera) P3_ExecutionCamera.Priority = 0;
+
+            if (P1_TopCamera) P1_TopCamera.Priority = 100;
+
+            if (_mainCameraBrain != null)
+            {
+                _mainCameraBrain.DefaultBlend = default;
+                StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+            }
+
+            PlayBGM(Phase1_BGM);
+
+            yield return new WaitForSeconds(1.5f);
+
+            if (_playerLife != null) _playerLife.ShowPlayerHealthBar();
+
+            yield return StartCoroutine(PlayCRTWarning("/// TIMELINE FRACTURE DETECTED ///", "[ REVERSE INITIATED ]", "RESTORING PREVIOUS STATE...", 1.5f));
 
             DisablePlayerAbilities(false);
             StartCoroutine(P1_DodgingRoutine());
@@ -474,19 +687,35 @@ namespace TheGlitch
             for (int round = 0; round < BombRounds; round++)
             {
                 if (_currentPhase != BossPhase.P1_Dodging) break;
+
                 if (BombLocations != null && BombLocations.Length > 0)
                 {
                     System.Collections.Generic.List<Transform> availableSpots = new System.Collections.Generic.List<Transform>(BombLocations);
+
                     int bombsThisRound = Mathf.Min(BombsPerRound, availableSpots.Count);
+                    System.Collections.Generic.List<Transform> chosenSpots = new System.Collections.Generic.List<Transform>();
+
                     for (int i = 0; i < bombsThisRound; i++)
                     {
                         int randomIndex = Random.Range(0, availableSpots.Count);
-                        Transform spawnPoint = availableSpots[randomIndex];
-                        if (spawnPoint != null) StartCoroutine(SpawnAoE(spawnPoint.position));
+                        chosenSpots.Add(availableSpots[randomIndex]);
                         availableSpots.RemoveAt(randomIndex);
                     }
+
+                    int half = bombsThisRound / 2;
+                    for (int i = 0; i < bombsThisRound; i++)
+                    {
+                        float dormantTime = (i < half) ? 0f : (WarningTime + 0.65f);
+                        StartCoroutine(SpawnAoE(chosenSpots[i].position, dormantTime));
+                    }
+
+                    float totalRoundTime = 0.3f + (WarningTime + 0.65f) * 2f + 1.0f;
+                    yield return new WaitForSeconds(totalRoundTime);
                 }
-                yield return new WaitForSeconds(WarningTime + 0.7f);
+                else
+                {
+                    yield return new WaitForSeconds(WarningTime + 0.7f);
+                }
             }
 
             _currentPhase = BossPhase.Transitioning;
@@ -558,46 +787,156 @@ namespace TheGlitch
                 rotation = Quaternion.LookRotation(direction);
             }
             GameObject bullet = Instantiate(ProjectilePrefab, position, rotation);
+
+            if (bullet.GetComponent<DataStreamProjectile>() == null)
+            {
+                bullet.AddComponent<DataStreamProjectile>();
+            }
+
             BossProjectile projScript = bullet.GetComponent<BossProjectile>();
             if (projScript != null) projScript.Speed = ProjectileSpeed;
         }
 
-        private IEnumerator SpawnAoE(Vector3 position)
+        private IEnumerator SpawnAoE(Vector3 position, float dormantTime)
         {
             GameObject warning = null;
             Renderer warningRenderer = null;
             float targetDiameter = BombRadius * 2f;
+
+            // ==========================================
+            // 【新增】：雷达扫描线
+            // ==========================================
+            GameObject scannerLine = null;
 
             if (AoEWarningPrefab != null)
             {
                 warning = Instantiate(AoEWarningPrefab, position, Quaternion.identity);
                 warning.transform.localScale = new Vector3(0, 0.1f, 0);
                 warningRenderer = warning.GetComponent<Renderer>();
-                if (warningRenderer != null) warningRenderer.material.color = new Color(1f, 0f, 0f, 0.4f);
+
+                if (warningRenderer != null) warningRenderer.material.color = new Color(0f, 1f, 1f, 0.1f);
+
+                scannerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                Destroy(scannerLine.GetComponent<Collider>());
+                scannerLine.transform.SetParent(warning.transform);
+                scannerLine.transform.localPosition = new Vector3(0, 0.5f, 0);
+                scannerLine.transform.localScale = new Vector3(0.02f, 0.1f, 1f);
+                Renderer scanR = scannerLine.GetComponent<Renderer>();
+                scanR.material = new Material(Shader.Find("Sprites/Default"));
+                scanR.material.color = new Color(0f, 1f, 1f, 0.6f);
+                scannerLine.SetActive(false);
             }
 
+            float expandTime = 0.3f;
+            float et = 0f;
+            while (et < expandTime)
+            {
+                et += Time.deltaTime;
+                float currentSize = Mathf.Lerp(0f, targetDiameter, et / expandTime);
+                if (warning != null) warning.transform.localScale = new Vector3(currentSize, 0.1f, currentSize);
+                yield return null;
+            }
+
+            if (dormantTime > 0f)
+            {
+                yield return new WaitForSeconds(dormantTime);
+            }
+
+            if (scannerLine != null) scannerLine.SetActive(true);
+
             float t = 0f;
+            Vector3 currentPos = position;
+
             while (t < WarningTime)
             {
                 t += Time.deltaTime;
-                float progress = t / WarningTime;
-                if (warning != null)
+                if (warning != null && _player != null)
                 {
-                    float currentSize = Mathf.Lerp(0f, targetDiameter, progress);
-                    warning.transform.localScale = new Vector3(currentSize, 0.1f, currentSize);
+                    Vector3 targetPos = _player.transform.position;
+                    targetPos.y = position.y;
+                    currentPos = Vector3.MoveTowards(currentPos, targetPos, Time.deltaTime * AoETrackingSpeed);
+                    warning.transform.position = currentPos;
+
+                    if (scannerLine != null) scannerLine.transform.Rotate(Vector3.up, 360f * Time.deltaTime, Space.Self);
+
+                    if (warningRenderer != null)
+                    {
+                        float alphaPulse = 0.15f + 0.1f * Mathf.Sin(Time.time * 20f);
+                        warningRenderer.material.color = new Color(0f, 1f, 1f, alphaPulse);
+                    }
                 }
                 yield return null;
             }
 
+            if (scannerLine != null) Destroy(scannerLine);
+
             if (warning != null)
             {
                 warning.transform.localScale = new Vector3(targetDiameter, 0.1f, targetDiameter);
-                if (warningRenderer != null) warningRenderer.material.color = Color.red;
+                if (warningRenderer != null) warningRenderer.material.color = new Color(1f, 0f, 0f, 0.8f);
             }
 
-            ApplyBombDamage(position);
+            RawCameraShake.Shake(0.15f, 0.1f);
+
+            yield return new WaitForSeconds(0.5f);
+
+            if (warning != null)
+            {
+                if (warningRenderer != null) warningRenderer.material.color = new Color(1f, 0f, 0f, 1f);
+                ApplyBombDamage(warning.transform.position);
+                StartCoroutine(SpawnOrbitalLaserFX(warning.transform.position, targetDiameter));
+            }
+
+            RawCameraShake.Shake(0.6f, 0.4f);
+
             yield return new WaitForSeconds(0.15f);
             if (warning != null) Destroy(warning);
+        }
+
+        private IEnumerator SpawnOrbitalLaserFX(Vector3 pos, float size)
+        {
+            GameObject laser = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Destroy(laser.GetComponent<Collider>());
+
+            laser.transform.position = pos + Vector3.up * 20f;
+            laser.transform.localScale = new Vector3(size * 0.8f, 20f, size * 0.8f);
+
+            Renderer laserR = laser.GetComponent<Renderer>();
+            laserR.material = new Material(Shader.Find("Sprites/Default"));
+            laserR.material.color = new Color(1f, 1f, 1f, 1f);
+
+            GameObject boom = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Destroy(boom.GetComponent<Collider>());
+            boom.transform.position = pos + Vector3.up * 0.2f;
+            boom.transform.localScale = new Vector3(size, 0.01f, size);
+
+            Renderer boomR = boom.GetComponent<Renderer>();
+            boomR.material = new Material(Shader.Find("Sprites/Default"));
+            boomR.material.color = new Color(1f, 0.1f, 0.1f, 1f);
+
+            float t = 0;
+            float duration = 0.5f;
+            while (t < duration)
+            {
+                t += Time.deltaTime;
+                float progress = t / duration;
+                float easeOut = 1f - (1f - progress) * (1f - progress);
+
+                Color laserColor = Color.Lerp(Color.white, new Color(1f, 0f, 0f, 0f), easeOut);
+                laserR.material.color = laserColor;
+                float laserWidth = Mathf.Lerp(size * 0.8f, 0f, easeOut);
+                laser.transform.localScale = new Vector3(laserWidth, 20f, laserWidth);
+
+                boom.transform.localScale = new Vector3(size * (1f + easeOut * 1.5f), 0.01f, size * (1f + easeOut * 1.5f));
+                Color boomColor = boomR.material.color;
+                boomColor.a = Mathf.Lerp(1f, 0f, easeOut);
+                boomR.material.color = boomColor;
+
+                yield return null;
+            }
+
+            Destroy(laser);
+            Destroy(boom);
         }
 
         private void ApplyBombDamage(Vector3 position)
@@ -621,6 +960,8 @@ namespace TheGlitch
             Renderer r = GetWeakPointRenderer(_currentWeakPointIndex);
             if (r != null && WeakPointExposedMat != null) r.material = WeakPointExposedMat;
 
+            Vector3 centerPos = r != null ? r.bounds.center : targetWP.transform.position;
+
             Transform camTarget = targetWP.transform;
             if (P1_WeakPointCamAnchors != null && _currentWeakPointIndex < P1_WeakPointCamAnchors.Length && P1_WeakPointCamAnchors[_currentWeakPointIndex] != null)
             {
@@ -628,75 +969,255 @@ namespace TheGlitch
             }
             else
             {
-                _dynamicCamAnchor.position = targetWP.transform.position + targetWP.transform.forward * 2.5f + Vector3.up * 1f;
-                _dynamicCamAnchor.LookAt(targetWP.transform);
+                _dynamicCamAnchor.position = centerPos + targetWP.transform.forward * 2.5f + Vector3.up * 0.5f;
+                _dynamicCamAnchor.LookAt(centerPos);
                 camTarget = _dynamicCamAnchor;
             }
 
             yield return StartCoroutine(CinematicCameraPan(camTarget, 2.2f, P1_QTESlowMo));
             yield return new WaitForSecondsRealtime(0.15f);
 
-            _p1Gauge = P1_GaugeMax * 0.5f;
-            if (QTE_ProgressBar != null)
-            {
-                QTE_ProgressBar.gameObject.SetActive(true);
-                QTE_ProgressBar.maxValue = P1_GaugeMax;
-                QTE_ProgressBar.value = _p1Gauge;
-            }
+            StartP1HackingMinigame();
+        }
 
-            ShowQTEPrompt("[E] MASH!");
-            _currentUIPromptScale = _qteUIPromptOriginalScale;
-            _currentUIBarScale = _qteUIBarOriginalScale;
+        private void StartP1HackingMinigame()
+        {
             _currentPhase = BossPhase.P1_QTE;
+            _p1HackTimer = P1_HackTimeLimit;
+            _p1FoodCollected = 0;
+            _p1SnakePos = new Vector2Int(2, 2);
+            _p1SnakeDir = WheelDir.Right;
+            _p1SnakeMoveTimer = P1_SnakeMoveInterval;
+
+            _p1SnakeHistory.Clear();
+            _p1EatenPositions.Clear();
+
+            SpawnP1Food();
+
+            DisablePlayerAbilities(true);
+
+            CreateHoloBoard();
+            StartCoroutine(CrtOnHoloBoardRoutine());
+            StartCoroutine(P1SnakeHologramRoutine());
+
+            if (BossHackWheel != null)
+            {
+                BossHackWheel.Open(
+                    new QuickHackOption { Name = "UP" },
+                    new QuickHackOption { Name = "RIGHT" },
+                    new QuickHackOption { Name = "DOWN" },
+                    new QuickHackOption { Name = "LEFT" }
+                );
+
+                if (P1_WeakPoints[_currentWeakPointIndex] != null)
+                {
+                    Renderer r = GetWeakPointRenderer(_currentWeakPointIndex);
+                    if (r != null)
+                    {
+                        _uiTargetAnchor.position = r.bounds.center;
+                        BossHackWheel.SetFollow(_uiTargetAnchor, Camera.main);
+                    }
+                    else
+                    {
+                        BossHackWheel.SetFollow(P1_WeakPoints[_currentWeakPointIndex].transform, Camera.main);
+                    }
+                }
+            }
+        }
+
+        private void SpawnP1Food()
+        {
+            int x, y;
+            do
+            {
+                x = Random.Range(0, _p1GridWidth);
+                y = Random.Range(0, _p1GridHeight);
+            } while (x == _p1SnakePos.x && y == _p1SnakePos.y);
+            _p1FoodPos = new Vector2Int(x, y);
         }
 
         private void UpdateP1QTE()
         {
-            _p1Gauge -= P1_GaugeDrainPerSecond * Time.unscaledDeltaTime;
-            if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
+            _p1HackTimer -= Time.unscaledDeltaTime;
+            if (_p1HackTimer <= 0f)
             {
-                _p1Gauge += P1_GaugeGainPerPress;
-                ApplyUIPunch(_p1Gauge / P1_GaugeMax);
+                FailP1Hacking("TIMEOUT!");
+                return;
             }
-            _p1Gauge = Mathf.Clamp(_p1Gauge, 0f, P1_GaugeMax);
-            if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p1Gauge;
 
-            if (_p1Gauge >= P1_GaugeMax) ResolveP1WeakPoint(true);
-            else if (_p1Gauge <= 0f) ResolveP1WeakPoint(false);
-            RecoverUIPunch();
+            if (BossHackWheel != null && Mouse.current != null)
+            {
+                BossHackWheel.FeedMouseDelta(Mouse.current.delta.ReadValue());
+            }
+
+            WheelDir currentInput = BossHackWheel != null ? BossHackWheel.CurrentDir : WheelDir.None;
+            if (currentInput != WheelDir.None)
+            {
+                _p1SnakeDir = currentInput;
+            }
+
+            _p1SnakeMoveTimer -= Time.unscaledDeltaTime;
+            if (_p1SnakeMoveTimer <= 0f)
+            {
+                _p1SnakeMoveTimer = P1_SnakeMoveInterval;
+
+                _p1SnakeHistory.Insert(0, _p1SnakePos);
+                if (_p1SnakeHistory.Count > 3) _p1SnakeHistory.RemoveAt(_p1SnakeHistory.Count - 1);
+
+                if (_p1SnakeDir == WheelDir.Up) _p1SnakePos.y++;
+                else if (_p1SnakeDir == WheelDir.Down) _p1SnakePos.y--;
+                else if (_p1SnakeDir == WheelDir.Left) _p1SnakePos.x--;
+                else if (_p1SnakeDir == WheelDir.Right) _p1SnakePos.x++;
+
+                if (_p1SnakePos.x < 0) _p1SnakePos.x = _p1GridWidth - 1;
+                else if (_p1SnakePos.x >= _p1GridWidth) _p1SnakePos.x = 0;
+
+                if (_p1SnakePos.y < 0) _p1SnakePos.y = _p1GridHeight - 1;
+                else if (_p1SnakePos.y >= _p1GridHeight) _p1SnakePos.y = 0;
+
+                if (_p1SnakePos == _p1FoodPos)
+                {
+                    _p1FoodCollected++;
+
+                    _p1EatenPositions.Add(_p1FoodPos);
+
+                    if (_p1FoodCollected >= P1_FoodRequired)
+                    {
+                        _currentPhase = BossPhase.Transitioning;
+                        StartCoroutine(ShutHoloBoardRoutineP1(true));
+                    }
+                    else
+                    {
+                        SpawnP1Food();
+                    }
+                }
+            }
         }
 
-        private void ApplyUIPunch(float gaugePercent)
+        private IEnumerator P1SnakeHologramRoutine()
         {
-            float punchMultiplier = Mathf.Lerp(1.1f, 1.6f, gaugePercent);
-            if (QTE_PromptTextUI != null)
+            if (_holoBoardText == null) yield break;
+
+            float bootTime = 0.25f;
+
+            while (_currentPhase == BossPhase.P1_QTE)
             {
-                _currentUIPromptScale = _qteUIPromptOriginalScale * punchMultiplier;
-                QTE_PromptTextUI.transform.localScale = _currentUIPromptScale;
-            }
-            if (QTE_ProgressBar != null)
-            {
-                _currentUIBarScale = _qteUIBarOriginalScale * punchMultiplier;
-                QTE_ProgressBar.transform.localScale = _currentUIBarScale;
+                if (_holoBoardText != null)
+                {
+                    string uiText = "";
+
+                    if (bootTime > 0)
+                    {
+                        uiText += $"<align=center><color=red><b>[ INITIALIZING VULNERABILITY... ]</b></color>\n";
+                        uiText += $"<size=20>ACCESSING NODE DATA...</size></align>\n\n";
+                        bootTime -= 0.05f;
+                    }
+                    else
+                    {
+                        uiText += $"<align=center><color=#00FF55><b>/// DATA EXTRACTION ///</b></color>\n";
+                        uiText += $"<size=20>TIME: {_p1HackTimer:F1}s   |   PACKETS: {_p1FoodCollected} / {P1_FoodRequired}</size></align>\n\n";
+                    }
+
+                    uiText += "<align=center><size=26><line-height=100%><mspace=40>";
+                    for (int y = _p1GridHeight - 1; y >= 0; y--)
+                    {
+                        for (int x = 0; x < _p1GridWidth; x++)
+                        {
+                            Vector2Int currentCell = new Vector2Int(x, y);
+
+                            if (bootTime > 0)
+                            {
+                                uiText += "<color=#113333>░</color>";
+                            }
+                            else if (currentCell == _p1SnakePos)
+                            {
+                                string headChar = "■";
+                                if (_p1SnakeDir == WheelDir.Up) headChar = "▲";
+                                else if (_p1SnakeDir == WheelDir.Down) headChar = "▼";
+                                else if (_p1SnakeDir == WheelDir.Left) headChar = "◄";
+                                else if (_p1SnakeDir == WheelDir.Right) headChar = "►";
+
+                                uiText += $"<color=#00FFFF>{headChar}</color>";
+                            }
+                            else if (currentCell == _p1FoodPos)
+                            {
+                                string foodColor = (Time.unscaledTime % 0.2f < 0.1f) ? "#FF0055" : "#FFFFFF";
+                                uiText += $"<color={foodColor}>◈</color>";
+                            }
+                            else if (_p1SnakeHistory.Contains(currentCell))
+                            {
+                                int index = _p1SnakeHistory.IndexOf(currentCell);
+                                if (index == 0) uiText += "<color=#00CCCC>▓</color>";
+                                else if (index == 1) uiText += "<color=#008888>▒</color>";
+                                else uiText += "<color=#005555>░</color>";
+                            }
+                            else if (_p1EatenPositions.Contains(currentCell))
+                            {
+                                uiText += "<color=#00FF55>+</color>";
+                            }
+                            else
+                            {
+                                uiText += "<color=#2A5555>+</color>";
+                            }
+                        }
+                        uiText += "\n";
+                    }
+                    uiText += "</mspace></line-height></size></align>";
+
+                    _holoBoardText.text = uiText;
+                }
+
+                yield return new WaitForSecondsRealtime(0.05f);
             }
         }
 
-        private void RecoverUIPunch()
+        private void FailP1Hacking(string reason)
         {
-            if (QTE_PromptTextUI != null)
-            {
-                _currentUIPromptScale = Vector3.Lerp(_currentUIPromptScale, _qteUIPromptOriginalScale, Time.unscaledDeltaTime * 15f);
-                QTE_PromptTextUI.transform.localScale = _currentUIPromptScale;
-            }
-            if (QTE_ProgressBar != null)
-            {
-                _currentUIBarScale = Vector3.Lerp(_currentUIBarScale, _qteUIBarOriginalScale, Time.unscaledDeltaTime * 15f);
-                QTE_ProgressBar.transform.localScale = _currentUIBarScale;
-            }
+            _currentPhase = BossPhase.Transitioning;
+
+            Debug.Log($"<color=red>【一阶段破解失败】{reason}</color>");
+            RawCameraShake.Shake(0.5f, 0.3f);
+            StartCoroutine(ShutHoloBoardRoutineP1(false));
         }
 
-        private void ResolveP1WeakPoint(bool success)
+        private IEnumerator ShutHoloBoardRoutineP1(bool success)
         {
+            if (BossHackWheel != null) BossHackWheel.Close();
+
+            if (success && _holoBoardText != null)
+            {
+                _holoBoardText.color = Color.green;
+                _holoBoardText.text = "\n\n<align=center><size=70><b>[ NODE DESTROYED ]</b></size></align>";
+
+                yield return new WaitForSecondsRealtime(0.8f);
+            }
+
+            if (_holoBoardObj != null && _holoBoardObj.transform.childCount > 0)
+            {
+                Transform bgTransform = _holoBoardObj.transform.GetChild(0);
+                float crtTime = 0f;
+                while (crtTime < 0.1f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float y = Mathf.Lerp(1f, 0.02f, crtTime / 0.1f);
+                    bgTransform.localScale = new Vector3(1f, y, 1f);
+                    yield return null;
+                }
+                crtTime = 0f;
+                while (crtTime < 0.1f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float x = Mathf.Lerp(1f, 0f, crtTime / 0.1f);
+                    bgTransform.localScale = new Vector3(x, 0.02f, 1f);
+                    yield return null;
+                }
+                _holoBoardObj.SetActive(false);
+                bgTransform.localScale = new Vector3(1f, 0.02f, 1f);
+            }
+
+            Cursor.lockState = CursorLockMode.Locked;
+            DisablePlayerAbilities(false);
+
             if (success)
             {
                 if (P1_WeakPoints[_currentWeakPointIndex] != null) P1_WeakPoints[_currentWeakPointIndex].SetActive(false);
@@ -716,10 +1237,30 @@ namespace TheGlitch
         private IEnumerator ReturnToP1Dodging()
         {
             _currentPhase = BossPhase.Transitioning;
-            ExitQTEState(true);
-            yield return new WaitForSeconds(2.0f);
+            Time.timeScale = 1f;
+
+            if (ScreenFader.Instance != null)
+            {
+                ScreenFader.Instance.DoFadeAndAction(() =>
+                {
+                    ResetQTECamera();
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
+                });
+
+                yield return new WaitForSeconds(1.0f);
+            }
+            else
+            {
+                ResetQTECamera();
+                yield return new WaitForSeconds(0.5f);
+            }
+
             DisablePlayerAbilities(false);
-            yield return new WaitForSeconds(0.5f);
+            yield return new WaitForSeconds(0.2f);
             StartCoroutine(P1_DodgingRoutine());
         }
         #endregion
@@ -730,27 +1271,28 @@ namespace TheGlitch
             _currentPhase = BossPhase.Transitioning;
             Time.timeScale = 1f;
 
-            HideQTEPrompt();
-            if (QTE_ProgressBar != null) QTE_ProgressBar.gameObject.SetActive(false);
-
             PlayBGM(Phase2_BGM);
-
-            CinemachineBlendDefinition oldBlend = default;
-            if (_mainCameraBrain != null) oldBlend = _mainCameraBrain.DefaultBlend;
 
             if (ScreenFader.Instance != null)
             {
                 ScreenFader.Instance.DoFadeAndAction(() =>
                 {
-                    ExitQTEState(true);
-                    if (QTE_CloseUpCamera) QTE_CloseUpCamera.Priority = 0;
+                    ResetQTECamera();
                     if (P1_TopCamera) P1_TopCamera.Priority = 0;
-
                     if (P2_ArmorDropCamera) P2_ArmorDropCamera.Priority = 100;
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
                 });
                 yield return new WaitForSeconds(1.0f);
-                if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
+            }
+            else
+            {
+                ResetQTECamera();
+                if (P1_TopCamera) P1_TopCamera.Priority = 0;
+                if (P2_ArmorDropCamera) P2_ArmorDropCamera.Priority = 100;
             }
 
             yield return new WaitForSeconds(0.5f);
@@ -782,7 +1324,8 @@ namespace TheGlitch
                     {
                         CharacterController cc = _player.GetComponent<CharacterController>();
                         if (cc != null) cc.enabled = false;
-                        _player.transform.position = Phase2Settings.PlayerStage.position;
+
+                        _player.transform.position = Phase2Settings.PlayerStage.position + Vector3.up * 0.1f;
                         _player.transform.rotation = Phase2Settings.PlayerStage.rotation;
                         if (cc != null) cc.enabled = true;
                     }
@@ -794,10 +1337,32 @@ namespace TheGlitch
                         P2_PillarPanCamera.transform.rotation = PillarPanStartPos.rotation;
                     }
 
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
                 });
                 yield return new WaitForSeconds(1.0f);
-                if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
+            }
+            else
+            {
+                if (BossArmorParent != null) BossArmorParent.SetActive(false);
+                if (P2_ArmorDropCamera) P2_ArmorDropCamera.Priority = 0;
+                if (Phase2Settings != null && Phase2Settings.PlayerStage != null && _player != null)
+                {
+                    CharacterController cc = _player.GetComponent<CharacterController>();
+                    if (cc != null) cc.enabled = false;
+                    _player.transform.position = Phase2Settings.PlayerStage.position + Vector3.up * 0.1f;
+                    _player.transform.rotation = Phase2Settings.PlayerStage.rotation;
+                    if (cc != null) cc.enabled = true;
+                }
+                if (P2_PillarPanCamera) P2_PillarPanCamera.Priority = 100;
+                if (PillarPanStartPos && P2_PillarPanCamera)
+                {
+                    P2_PillarPanCamera.transform.position = PillarPanStartPos.position;
+                    P2_PillarPanCamera.transform.rotation = PillarPanStartPos.rotation;
+                }
             }
 
             _pillarStates = new PillarState[P2_Pillars != null ? P2_Pillars.Length : 0];
@@ -873,9 +1438,37 @@ namespace TheGlitch
                         P2_DynamicLockCamera.Priority = 100;
                     }
 
-                    if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = default;
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
                 });
                 yield return new WaitForSeconds(1.0f);
+            }
+            else
+            {
+                if (P2_PillarPanCamera) P2_PillarPanCamera.Priority = 0;
+                if (_player != null && BossCore != null && _dynamicCamAnchor != null)
+                {
+                    _dynamicCamAnchor.position = _player.transform.position;
+                    Vector3 lookDir = BossCore.position - _player.transform.position;
+                    lookDir.y = 0;
+                    if (lookDir != Vector3.zero) _dynamicCamAnchor.rotation = Quaternion.LookRotation(lookDir);
+                }
+
+                if (P2_DynamicLockCamera)
+                {
+                    if (_dynamicCamAnchor != null) P2_DynamicLockCamera.Follow = _dynamicCamAnchor;
+                    if (BossCore != null) P2_DynamicLockCamera.LookAt = BossCore;
+                    if (_dynamicCamAnchor != null)
+                    {
+                        P2_DynamicLockCamera.transform.position = _dynamicCamAnchor.position;
+                        P2_DynamicLockCamera.transform.rotation = _dynamicCamAnchor.rotation;
+                    }
+                    P2_DynamicLockCamera.PreviousStateIsValid = false;
+                    P2_DynamicLockCamera.Priority = 100;
+                }
             }
 
             DisablePlayerAbilities(false);
@@ -924,19 +1517,15 @@ namespace TheGlitch
 
                             P2_LaserRenderer.gameObject.SetActive(true);
 
-                            // ==========================================
-                            // 【动画起点】：蓄力刚开始时，激光宽度为 0，几乎看不见！
                             P2_LaserRenderer.startWidth = 0f;
                             P2_LaserRenderer.endWidth = 0f;
                             P2_LaserRenderer.material.color = new Color(1f, 0f, 0f, 0f);
                         }
 
-                        // 【启动粒子】：打开引力场，开始吸收四周的能量！
                         if (LaserChargeFX != null)
                         {
                             LaserChargeFX.Play();
                         }
-                        // ==========================================
                     }
                     break;
 
@@ -957,35 +1546,22 @@ namespace TheGlitch
 
                         P2_LaserRenderer.SetPosition(1, _lockedLaserTargetPos);
 
-                        // ==========================================
-                        // 【核心动画】：随着时间推移的蓄力演出！
-                        // chargeProgress 会在 3 秒内从 0 平滑涨到 1
                         float chargeProgress = 1f - (_p2StateTimer / P2_LaserAimTime);
 
-                        // 1. 让粒子吸收管永远精准指向目标点，并让粒子数量极速飙升！
                         if (LaserChargeFX != null)
                         {
                             LaserChargeFX.transform.LookAt(_lockedLaserTargetPos);
-
-                            // 【绝杀修复】：用代码强制控制粒子的喷发量！
-                            // 蓄力刚开始时 50，蓄力快满时狂飙到 1000！绝对连贯！
                             var em = LaserChargeFX.emission;
                             em.rateOverTime = Mathf.Lerp(50f, 1000f, chargeProgress);
                         }
 
-                        // 2. 射线宽度慢慢变宽，我也帮你加粗了一点 (0 -> 0.2)
                         float baseWidth = Mathf.Lerp(0f, 0.2f, chargeProgress);
-
-                        // 3. 狂暴闪烁：蓄力过半后，射线开始发生高频的不稳定跳动！
                         float jitter = chargeProgress > 0.6f ? Random.Range(-0.06f, 0.06f) : 0f;
                         float currentWidth = Mathf.Max(0.01f, baseWidth + jitter);
 
                         P2_LaserRenderer.startWidth = currentWidth;
                         P2_LaserRenderer.endWidth = currentWidth;
-
-                        // 4. 颜色由暗红慢慢变得极度刺眼发白
                         P2_LaserRenderer.material.color = new Color(1f, chargeProgress * 0.8f, chargeProgress * 0.8f, chargeProgress);
-                        // ==========================================
                     }
 
                     _p2StateTimer -= Time.deltaTime;
@@ -995,18 +1571,14 @@ namespace TheGlitch
                         _currentPhase = BossPhase.Phase2_LaserFiring;
                         _hasLaserDamagedPlayer = false;
 
-                        // ==========================================
-                        // 【爆发】：蓄力结束，停止吸气！
                         if (LaserChargeFX != null) LaserChargeFX.Stop();
 
-                        // 射线瞬间膨胀为毁灭光柱！
                         if (P2_LaserRenderer != null)
                         {
                             P2_LaserRenderer.startWidth = 1.2f;
                             P2_LaserRenderer.endWidth = 1.2f;
                             P2_LaserRenderer.material.color = Color.white;
                         }
-                        // ==========================================
                         RawCameraShake.Shake(0.5f, 0.4f);
                     }
                     break;
@@ -1019,7 +1591,6 @@ namespace TheGlitch
                         P2_LaserRenderer.SetPosition(0, BossCore.position);
                         P2_LaserRenderer.SetPosition(1, _lockedLaserTargetPos);
 
-                        // 光柱开火后的余晖衰减
                         float progress = 1f - (_p2StateTimer / P2_LaserFireTime);
                         float currentWidth = Mathf.Lerp(1.2f, 0f, progress);
                         P2_LaserRenderer.startWidth = currentWidth;
@@ -1063,12 +1634,14 @@ namespace TheGlitch
                     break;
 
                 case BossPhase.Phase2_HackingMinigame:
-                    MaintainLockOnCamera(); // 保持视角锁定
-                    UpdateP2HackingMinigame(); // 运行骇客轮盘检测
+                    MaintainLockOnCamera();
+                    UpdateP2HackingMinigame();
                     break;
-                // ==========================================
-                // 【修改】：第三阶段互动逻辑 (A/D 步步逼近核心)
-                // ==========================================
+
+                case BossPhase.Phase2_Stunned:
+                    MaintainLockOnCamera();
+                    break;
+
                 case BossPhase.Phase3_Walk1:
                     if (Keyboard.current != null && (Keyboard.current.aKey.wasPressedThisFrame || Keyboard.current.dKey.wasPressedThisFrame))
                         StartCoroutine(CinematicWalkRoutine(P3_WalkTarget_1, P3_WalkCamera_2, BossPhase.Phase3_Walk2, Keyboard.current.aKey.wasPressedThisFrame));
@@ -1085,20 +1658,15 @@ namespace TheGlitch
                     break;
 
                 case BossPhase.Phase3_Execution:
-                    // ==========================================
-                    // 无论按不按E，黑洞中心和发射区必须永远死死锁定在玩家胸口和Boss身上！
                     if (SiphonParticles != null && BossCore != null && _player != null)
                     {
-                        // 完美贴合胸口的位置
                         Vector3 chestPos = _player.transform.position + Vector3.up * 0.8f - _player.transform.right * 0f;
-
                         SiphonParticles.transform.position = chestPos;
                         SiphonParticles.transform.rotation = Quaternion.identity;
 
                         var shape = SiphonParticles.shape;
                         shape.position = BossCore.position - chestPos;
                     }
-                    // ==========================================
 
                     if (Keyboard.current != null && Keyboard.current.eKey.isPressed)
                     {
@@ -1114,7 +1682,6 @@ namespace TheGlitch
 
                         float pullProgress = Mathf.Clamp01(_p2HackGauge / P3_ExecutionTimeRequired);
 
-                        // 1. 核心的拉扯位移
                         if (BossCore != null && P3_CoreAscendPos != null && _player != null)
                         {
                             Vector3 startPos = P3_CoreAscendPos.position;
@@ -1122,23 +1689,17 @@ namespace TheGlitch
                             BossCore.position = Vector3.Lerp(startPos, targetPos, Mathf.SmoothStep(0f, 1f, pullProgress));
                         }
 
-                        // 2. 空间扭曲 (Dolly Zoom)
                         if (P3_ExecutionCamera != null)
                         {
                             P3_ExecutionCamera.Lens.FieldOfView = Mathf.Lerp(60f, 25f, pullProgress);
                         }
 
-                        // 3. 【优化】：大幅削弱镜头摇晃！(从 0.5f 降到 0.08f) 让你的特效清晰可见！
                         float heavyShake = Mathf.Lerp(0f, 0.08f, pullProgress);
                         if (heavyShake > 0) RawCameraShake.Shake(heavyShake, 0.1f);
 
-                        // 4. 【完美修复特效断档】：通过控制 Emission(发射器) 来实现无缝续传！
                         if (SiphonParticles != null)
                         {
-                            // 如果系统处于休眠，先唤醒它
                             if (!SiphonParticles.isPlaying) SiphonParticles.Play();
-
-                            // 打开水龙头，开始疯狂发射！
                             var em = SiphonParticles.emission;
                             em.enabled = true;
                         }
@@ -1167,7 +1728,6 @@ namespace TheGlitch
                     }
                     else
                     {
-                        // 如果松开 E 键，进度条倒退，核心像有弹力一样飘回天上
                         _p2HackGauge = Mathf.Max(0, _p2HackGauge - Time.deltaTime * 3f);
                         if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p2HackGauge;
 
@@ -1184,14 +1744,14 @@ namespace TheGlitch
                             P3_ExecutionCamera.Lens.FieldOfView = Mathf.Lerp(60f, 25f, pullProgress);
                         }
 
-                        // 【完美修复特效断档】：松手时，仅仅关闭“水龙头(发射器)”，不关闭系统本身。
-                        // 这样残留的粒子会继续飞向玩家，且下次按 E 瞬间就能续上！
                         if (SiphonParticles != null)
                         {
                             var em = SiphonParticles.emission;
                             em.enabled = false;
                         }
                     }
+
+                    // 【注意】：此处仅用于第三阶段长按 E 时更新 UI 动画缩放
                     RecoverUIPunch();
                     break;
             }
@@ -1221,13 +1781,12 @@ namespace TheGlitch
 
             if (nearestExposedIndex != -1)
             {
-                // 改成提示按一下E
                 ShowQTEPrompt("[PRESS E] HACK FIREWALL");
 
                 if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
                 {
                     HideQTEPrompt();
-                    StartP2HackingMinigame(nearestExposedIndex); // 开始小游戏！
+                    StartP2HackingMinigame(nearestExposedIndex);
                 }
             }
             else
@@ -1235,25 +1794,10 @@ namespace TheGlitch
                 HideQTEPrompt();
                 if (QTE_ProgressBar != null) QTE_ProgressBar.gameObject.SetActive(false);
             }
+            // 顺便在这里调用 RecoverUIPunch 让 QTE 提示的弹跳恢复
             RecoverUIPunch();
         }
 
-        private void ExecuteHack(int pillarIndex)
-        {
-            _pillarStates[pillarIndex] = PillarState.Hacked;
-            ChangePillarMaterial(pillarIndex, PillarHackedMat);
-
-            _p2HackGauge = 0f;
-            HideQTEPrompt();
-            if (QTE_ProgressBar != null) QTE_ProgressBar.gameObject.SetActive(false);
-
-            StartCoroutine(BossStunRoutine());
-        }
-        // ==========================================
-        // 【新增】：骇客小游戏专属全息面板变量
-        private GameObject _holoBoardObj;
-        private TextMeshProUGUI _holoBoardText;
-        private RectTransform _scanlineRT; // <--- 新增：用于控制扫描线的物理组件
         private void StartP2HackingMinigame(int pillarIndex)
         {
             _currentPhase = BossPhase.Phase2_HackingMinigame;
@@ -1262,17 +1806,12 @@ namespace TheGlitch
             _p2LastInput = WheelDir.None;
             _p2HackTimer = P2_HackTimeLimit;
 
-            // 开局给 0.2 秒时间让玩家停稳鼠标，防止进场误触
-            _p2InputCooldownTimer = 0.2f;
-
-            // 隐藏并锁定鼠标
-            Cursor.lockState = CursorLockMode.Locked;
-            Cursor.visible = false;
             DisablePlayerAbilities(true);
 
-            HideQTEPrompt();
+            CreateHoloBoard();
+            StartCoroutine(CrtOnHoloBoardRoutine());
+            StartCoroutine(RollingHologramRoutine());
 
-            // 生成真实的目标序列
             _p2Sequence.Clear();
             for (int i = 0; i < P2_SequenceLength; i++)
             {
@@ -1301,15 +1840,17 @@ namespace TheGlitch
                 if (P2_Pillars[_p2TargetPillarIndex] != null)
                 {
                     Renderer r = P2_Pillars[_p2TargetPillarIndex].GetComponentInChildren<Renderer>();
-                    Transform targetT = r != null ? r.transform : P2_Pillars[_p2TargetPillarIndex].transform;
-                    BossHackWheel.SetFollow(targetT, Camera.main);
+                    if (r != null)
+                    {
+                        _uiTargetAnchor.position = r.bounds.center;
+                        BossHackWheel.SetFollow(_uiTargetAnchor, Camera.main);
+                    }
+                    else
+                    {
+                        BossHackWheel.SetFollow(P2_Pillars[_p2TargetPillarIndex].transform, Camera.main);
+                    }
                 }
             }
-
-            // 【修改】：创建全息板，并启动“老虎机”协程！
-            CreateHoloBoard();
-            if (_holoBoardObj != null) _holoBoardObj.SetActive(true);
-            StartCoroutine(RollingHologramRoutine());
         }
 
         private void UpdateP2HackingMinigame()
@@ -1361,16 +1902,12 @@ namespace TheGlitch
                 {
                     _p2CurrentSeqIndex++;
                     RawCameraShake.Shake(0.05f, 0.1f);
-                    // ==========================================
-                    // 【新增】：每次破解成功，全息面板都会“砰”地震动一下，打击感拉满！
-                    StartCoroutine(HoloBoardPunch());
-                    // ==========================================
-                    // 【修改】：这里删除了之前的 UpdateSequenceUI，因为老虎机会自动检测更新！
 
                     if (_p2CurrentSeqIndex >= P2_SequenceLength)
                     {
+                        _currentPhase = BossPhase.Transitioning;
+
                         if (BossHackWheel != null) BossHackWheel.Close();
-                        if (_holoBoardObj != null) _holoBoardObj.SetActive(false);
                         Cursor.lockState = CursorLockMode.Locked;
                         DisablePlayerAbilities(false);
                         ExecuteHack(_p2TargetPillarIndex);
@@ -1395,29 +1932,80 @@ namespace TheGlitch
             }
         }
 
+        private void ExecuteHack(int pillarIndex)
+        {
+            _pillarStates[pillarIndex] = PillarState.Hacked;
+            ChangePillarMaterial(pillarIndex, PillarHackedMat);
+
+            _p2HackGauge = 0f;
+            HideQTEPrompt();
+            if (QTE_ProgressBar != null) QTE_ProgressBar.gameObject.SetActive(false);
+
+            StartCoroutine(ShutHoloBoardRoutine(true));
+        }
+
         private void FailP2Hacking(string reason)
         {
-            if (BossHackWheel != null) BossHackWheel.Close();
-            if (_holoBoardObj != null) _holoBoardObj.SetActive(false); // 失败也关掉全息板
+            _currentPhase = BossPhase.Transitioning;
 
             Debug.Log($"<color=red>【破解失败】{reason} 防火墙重置！</color>");
             RawCameraShake.Shake(0.5f, 0.3f);
+            StartCoroutine(ShutHoloBoardRoutine(false));
+        }
+
+        private IEnumerator ShutHoloBoardRoutine(bool success)
+        {
+            if (BossHackWheel != null) BossHackWheel.Close();
+
+            if (success && _holoBoardText != null)
+            {
+                _holoBoardText.color = Color.cyan;
+                _holoBoardText.text = "\n\n<align=center><size=70><b>[ REBOOT SUCCESS ]</b></size></align>";
+
+                yield return new WaitForSecondsRealtime(0.8f);
+            }
+
+            if (_holoBoardObj != null && _holoBoardObj.transform.childCount > 0)
+            {
+                Transform bgTransform = _holoBoardObj.transform.GetChild(0);
+
+                float crtTime = 0f;
+                while (crtTime < 0.1f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float y = Mathf.Lerp(1f, 0.02f, crtTime / 0.1f);
+                    bgTransform.localScale = new Vector3(1f, y, 1f);
+                    yield return null;
+                }
+
+                crtTime = 0f;
+                while (crtTime < 0.1f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float x = Mathf.Lerp(1f, 0f, crtTime / 0.1f);
+                    bgTransform.localScale = new Vector3(x, 0.02f, 1f);
+                    yield return null;
+                }
+
+                _holoBoardObj.SetActive(false);
+                bgTransform.localScale = new Vector3(1f, 0.02f, 1f);
+            }
 
             Cursor.lockState = CursorLockMode.Locked;
             DisablePlayerAbilities(false);
 
-            _pillarStates[_p2TargetPillarIndex] = PillarState.Normal;
-            ChangePillarMaterial(_p2TargetPillarIndex, PillarNormalMat);
-
-            _currentPhase = BossPhase.Phase2_Idle;
+            if (success)
+            {
+                StartCoroutine(BossStunRoutine());
+            }
+            else
+            {
+                _pillarStates[_p2TargetPillarIndex] = PillarState.Normal;
+                ChangePillarMaterial(_p2TargetPillarIndex, PillarNormalMat);
+                _currentPhase = BossPhase.Phase2_Idle;
+            }
         }
 
-        // ==========================================
-        // 下面这四个函数负责“全息暗色面板”与极致赛博表现
-        // ==========================================
-        // ==========================================
-        // 下面这四个函数负责“全息暗色面板”与极致赛博表现
-        // ==========================================
         private void CreateHoloBoard()
         {
             if (_holoBoardObj != null) return;
@@ -1427,19 +2015,21 @@ namespace TheGlitch
             c.renderMode = RenderMode.ScreenSpaceOverlay;
             c.sortingOrder = 999;
 
-            // 1. 主背景 (带有高科技玻璃质感的深青色)
             GameObject bgObj = new GameObject("DarkBG");
             bgObj.transform.SetParent(_holoBoardObj.transform, false);
             Image bg = bgObj.AddComponent<Image>();
             bg.color = new Color(0.01f, 0.04f, 0.06f, 0.85f);
+
             bgObj.AddComponent<RectMask2D>();
+
             RectTransform bgRT = bg.rectTransform;
             bgRT.anchorMin = new Vector2(0.5f, 0.5f);
             bgRT.anchorMax = new Vector2(0.5f, 0.5f);
-            bgRT.sizeDelta = new Vector2(850, 240); // 稍微加高一点，留出灯条空间
-            bgRT.anchoredPosition = new Vector2(500, 0);
+            bgRT.sizeDelta = new Vector2(1000, 320);
+            bgRT.anchoredPosition = new Vector2(0, -280);
 
-            // 2. 顶部霓虹灯条 (青色)
+            int hexOffset = 40;
+
             GameObject topLineObj = new GameObject("TopLine");
             topLineObj.transform.SetParent(bgObj.transform, false);
             Image topLine = topLineObj.AddComponent<Image>();
@@ -1447,10 +2037,9 @@ namespace TheGlitch
             RectTransform topRT = topLine.rectTransform;
             topRT.anchorMin = new Vector2(0, 1);
             topRT.anchorMax = new Vector2(1, 1);
-            topRT.offsetMin = new Vector2(0, -2); // 2 像素高
+            topRT.offsetMin = new Vector2(0, -2);
             topRT.offsetMax = new Vector2(0, 0);
 
-            // 3. 底部霓虹灯条 (洋红/警告红)
             GameObject botLineObj = new GameObject("BotLine");
             botLineObj.transform.SetParent(bgObj.transform, false);
             Image botLine = botLineObj.AddComponent<Image>();
@@ -1461,13 +2050,12 @@ namespace TheGlitch
             botRT.offsetMin = new Vector2(0, 0);
             botRT.offsetMax = new Vector2(0, 2);
 
-            // 4. 背景数字水印 (巨大但极其微弱的二进制乱码)
             GameObject bgTextObj = new GameObject("Watermark");
             bgTextObj.transform.SetParent(bgObj.transform, false);
             TextMeshProUGUI bgText = bgTextObj.AddComponent<TextMeshProUGUI>();
             bgText.alignment = TextAlignmentOptions.Center;
             bgText.fontSize = 110;
-            bgText.color = new Color(0f, 1f, 1f, 0.04f); // 透明度只有极低的 4%
+            bgText.color = new Color(0f, 1f, 1f, 0.04f);
             bgText.enableWordWrapping = false;
             bgText.text = "01010110 01100010\n10100111 11010100";
             RectTransform bgTextRT = bgText.rectTransform;
@@ -1476,18 +2064,16 @@ namespace TheGlitch
             bgTextRT.offsetMin = Vector2.zero;
             bgTextRT.offsetMax = Vector2.zero;
 
-            // 5. 动态全息扫描线 (Scanline)
             GameObject scanlineObj = new GameObject("Scanline");
             scanlineObj.transform.SetParent(bgObj.transform, false);
             Image scanline = scanlineObj.AddComponent<Image>();
-            scanline.color = new Color(0f, 1f, 1f, 0.15f); // 15%透明度的亮青线
+            scanline.color = new Color(0f, 1f, 1f, 0.15f);
             _scanlineRT = scanline.rectTransform;
             _scanlineRT.anchorMin = new Vector2(0, 1);
             _scanlineRT.anchorMax = new Vector2(1, 1);
-            _scanlineRT.sizeDelta = new Vector2(0, 5); // 5像素高的线
+            _scanlineRT.sizeDelta = new Vector2(0, 5);
             _scanlineRT.anchoredPosition = new Vector2(0, 0);
 
-            // 6. 前景动态文字
             GameObject txtObj = new GameObject("HoloText");
             txtObj.transform.SetParent(bgObj.transform, false);
             _holoBoardText = txtObj.AddComponent<TextMeshProUGUI>();
@@ -1500,45 +2086,51 @@ namespace TheGlitch
             txtRT.anchorMax = Vector2.one;
             txtRT.offsetMin = new Vector2(20, -20);
             txtRT.offsetMax = new Vector2(-20, -20);
+
+            _holoBoardObj.SetActive(false);
+            Transform bgTransform = _holoBoardObj.transform.GetChild(0);
+            bgTransform.localScale = new Vector3(1f, 0.02f, 1f);
         }
 
-        // 【新增】：平滑运行的扫描线动画协程
+        private IEnumerator CrtOnHoloBoardRoutine()
+        {
+            if (_holoBoardObj == null) yield break;
+
+            _holoBoardObj.SetActive(true);
+
+            Transform bgTransform = _holoBoardObj.transform.GetChild(0);
+
+            float crtTime = 0f;
+            Vector3 targetScale = Vector3.one;
+
+            while (crtTime < 0.15f)
+            {
+                crtTime += Time.unscaledDeltaTime;
+                float y = Mathf.Lerp(0.02f, 1f, crtTime / 0.15f);
+
+                bgTransform.localScale = new Vector3(1f, y, 1f);
+                yield return null;
+            }
+
+            bgTransform.localScale = targetScale;
+            Debug.Log("<color=cyan>【协议启动】CRT On 特效完成！防火墙协议正式切入！</color>");
+        }
+
         private IEnumerator AnimateScanline()
         {
             if (_scanlineRT == null) yield break;
-            float height = 240f; // UI底板高度
-            float speed = 180f;  // 扫描线每秒移动 180 像素
+            float height = 320f;
+            float speed = 180f;
             float currentY = 0f;
 
-            // 只要还在骇客状态，扫描线就会一直平滑扫描
             while (_currentPhase == BossPhase.Phase2_HackingMinigame)
             {
                 currentY -= speed * Time.unscaledDeltaTime;
-                if (currentY < -height) currentY = 0f; // 触底反弹回顶部
+                if (currentY < -height) currentY = 0f;
 
                 _scanlineRT.anchoredPosition = new Vector2(0, currentY);
                 yield return null;
             }
-        }
-
-        // ... (HoloBoardPunch 和 GetArrowString 保持上个版本不变)
-
-        private IEnumerator HoloBoardPunch()
-        {
-            if (_holoBoardObj == null) yield break;
-            Transform bgTransform = _holoBoardObj.transform.GetChild(0);
-
-            float elapsed = 0f;
-            float duration = 0.15f;
-
-            while (elapsed < duration)
-            {
-                elapsed += Time.deltaTime;
-                float scale = Mathf.Lerp(1.15f, 1f, elapsed / duration);
-                bgTransform.localScale = new Vector3(scale, scale, 1f);
-                yield return null;
-            }
-            bgTransform.localScale = Vector3.one;
         }
 
         private string GetArrowString(WheelDir dir)
@@ -1553,15 +2145,11 @@ namespace TheGlitch
             return "■";
         }
 
-        // 【终极机制】：采用像素级绝对定位 (Absolute Positioning) 完美对齐
-        // 【终极机制】：采用像素级绝对定位 + 无缝启动过渡，彻底解决排版跳动！
         private IEnumerator RollingHologramRoutine()
         {
             if (_holoBoardText == null) yield break;
 
             string[] hexChars = new string[] { "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F" };
-
-            // 引入一个启动计时器，用来替代之前会导致排版跳动的 yield return
             float bootTime = 0.25f;
 
             while (_currentPhase == BossPhase.Phase2_HackingMinigame)
@@ -1571,16 +2159,14 @@ namespace TheGlitch
                     string seqLine = "";
                     string hexLine = "";
 
-                    // 每一帧都老老实实把两排文字画出来，保持物理高度绝对一致！
                     for (int i = 0; i < P2_SequenceLength; i++)
                     {
                         string randomHex = hexChars[Random.Range(0, 16)] + hexChars[Random.Range(0, 16)];
-                        int basePos = 60 + (i * 190);
-                        int hexOffset = 40;
+                        int basePos = 130 + (i * 200);
+                        int hexOffset = 45;
 
                         if (bootTime > 0)
                         {
-                            // 启动阶段：全都是明灰色的乱码，营造系统正在接管的视觉
                             WheelDir randomDir = (WheelDir)Random.Range(1, 5);
                             seqLine += $"<pos={basePos}><color=#889999>[ {GetArrowString(randomDir)} ]</color>";
                             hexLine += $"<pos={basePos + hexOffset}><color=#889999>{randomHex}</color>";
@@ -1597,7 +2183,6 @@ namespace TheGlitch
                         }
                         else
                         {
-                            // 【修复】：未激活的颜色从暗灰 #444444 提亮到科技灰 #889999！
                             WheelDir randomDir = (WheelDir)Random.Range(1, 5);
                             seqLine += $"<pos={basePos}><color=#889999>[ {GetArrowString(randomDir)} ]</color>";
                             hexLine += $"<pos={basePos + hexOffset}><color=#889999>{randomHex}</color>";
@@ -1608,19 +2193,16 @@ namespace TheGlitch
 
                     if (bootTime > 0)
                     {
-                        // 启动头 0.25 秒，只显示红色的警告标题，但排版行数与下方严格一致！
                         uiText += $"<align=center><color=red><b>[ INITIALIZING OVERRIDE... ]</b></color>\n";
                         uiText += $"<size=20>ESTABLISHING CONNECTION...</size></align>\n\n";
                         bootTime -= 0.05f;
                     }
                     else
                     {
-                        // 正常骇客状态标题
                         uiText += $"<align=center><color=#FF0055><b>/// FIREWALL BYPASS ///</b></color>\n";
                         uiText += $"<size=20>UPLINK TIME: {_p2HackTimer:F1}s</size></align>\n\n";
                     }
 
-                    // 把底部永远稳定的两排符号贴上去
                     uiText += $"<align=left><size=55>{seqLine}</size>\n";
                     uiText += $"<size=22>{hexLine}</size></align>";
 
@@ -1631,9 +2213,6 @@ namespace TheGlitch
             }
         }
 
-        // ==========================================
-        // 【新增】：生成极致赛博朋克风的“错位残影” (Glitch Afterimage)
-        // ==========================================
         private IEnumerator BossStunRoutine()
         {
             _currentPhase = BossPhase.Phase2_Stunned;
@@ -1656,12 +2235,7 @@ namespace TheGlitch
                 yield break;
             }
 
-            // ==========================================
-            // 【神级特写演出】：子弹时间宕机特写
-            // ==========================================
             DisablePlayerAbilities(true);
-
-            // 触发 0.2倍速 的极致子弹时间
             Time.timeScale = 0.2f;
 
             CinemachineBlendDefinition oldBlend = default;
@@ -1669,6 +2243,7 @@ namespace TheGlitch
             {
                 oldBlend = _mainCameraBrain.DefaultBlend;
                 _mainCameraBrain.DefaultBlend = default;
+                StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
             }
 
             if (QTE_CloseUpCamera != null && BossCore != null)
@@ -1691,36 +2266,101 @@ namespace TheGlitch
                 }
             }
 
-            ShowQTEPrompt("<line-height=120%><color=red><size=60><b>[ CRITICAL ERROR ]</b></size>\n<size=35>SYSTEM REBOOTING...</size></color></line-height>");
+            if (QTE_PromptTextUI != null && QTE_TextComponent != null)
+            {
+                QTE_PromptTextUI.SetActive(true);
+                QTE_TextComponent.text = "<color=#FF0033><size=30>/// SYSTEM OVERRIDE ///</size>\n<size=65><b>[ CRITICAL ERROR ]</b></size>\n<size=25>INITIATING REBOOT SEQUENCE...</size></color>";
 
-            // ==========================================
-            // 【修改 1】：拉长表现时间！现实中的 2.5 秒，让你看个爽！
+                float crtTime = 0f;
+                while (crtTime < 0.15f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float y = Mathf.Lerp(0.02f, 1f, crtTime / 0.15f);
+                    QTE_PromptTextUI.transform.localScale = new Vector3(_qteUIPromptOriginalScale.x, y * _qteUIPromptOriginalScale.y, _qteUIPromptOriginalScale.z);
+                    yield return null;
+                }
+                QTE_PromptTextUI.transform.localScale = _qteUIPromptOriginalScale;
+            }
+
             Vector3 originalCorePos = BossCore.position;
             float spasmTime = 2.5f;
             float ghostTimer = 0f;
+            float uiFlickerTimer = 0f;
 
             while (spasmTime > 0)
             {
                 spasmTime -= Time.unscaledDeltaTime;
                 ghostTimer -= Time.unscaledDeltaTime;
+                uiFlickerTimer -= Time.unscaledDeltaTime;
 
-                // 每 0.15 秒爆发一次皮筋残影！
                 if (ghostTimer <= 0f)
                 {
                     ghostTimer = 0.15f;
-                    // 【修改 2】：不再传入旧材质，里面会自动生成原生的高亮材质
                     StartCoroutine(SpawnAfterimageRoutine(BossCore));
                     RawCameraShake.Shake(0.4f, 0.05f);
+                }
+
+                if (uiFlickerTimer <= 0f)
+                {
+                    uiFlickerTimer = Random.Range(0.05f, 0.15f);
+                    float rand = Random.value;
+
+                    if (rand < 0.6f)
+                    {
+                        ShowQTEPrompt("<color=#FF0033><size=30>/// SYSTEM OVERRIDE ///</size>\n<size=65><b>[ CRITICAL ERROR ]</b></size>\n<size=25>INITIATING REBOOT SEQUENCE...</size></color>");
+                    }
+                    else if (rand < 0.85f)
+                    {
+                        ShowQTEPrompt("<color=#550000><size=30>/// SY*T#M OV%RRI&E ///</size>\n<size=65><b>[ CR!T!CAL E#R0R ]</b></size>\n<size=25>IN!TI@T!NG R*B00T...</size></color>");
+                    }
+                    else if (rand < 0.95f)
+                    {
+                        string[] hexGlitch = { "0xDEADBEEF", "FATAL_EXCEPTION", "ERR_MEM_CORRUPT", "0xFFFFFFFF" };
+                        string randomHex = hexGlitch[Random.Range(0, hexGlitch.Length)];
+                        string color = Random.value > 0.5f ? "#00FFFF" : "#FFFFFF";
+                        ShowQTEPrompt($"<color={color}><size=30>/// KERNEL PANIC ///</size>\n<size=65><b>[ {randomHex} ]</b></size>\n<size=25>DUMPING PHYSICAL MEMORY...</size></color>");
+                    }
+                    else
+                    {
+                        HideQTEPrompt();
+                    }
                 }
 
                 BossCore.position = originalCorePos + (Random.insideUnitSphere * 0.05f);
                 yield return null;
             }
-            // ==========================================
 
             BossCore.position = originalCorePos;
 
-            // 杀毒完毕，世界恢复正常
+            if (QTE_PromptTextUI != null && QTE_TextComponent != null)
+            {
+                QTE_PromptTextUI.SetActive(true);
+                QTE_TextComponent.text = "<color=#00FFFF><size=30>/// SYSTEM OVERRIDE ///</size>\n<size=65><b>[ REBOOT SUCCESS ]</b></size>\n<size=25>FIREWALL RESTORED...</size></color>";
+
+                yield return new WaitForSecondsRealtime(1.0f);
+
+                float crtTime = 0f;
+                while (crtTime < 0.1f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float y = Mathf.Lerp(1f, 0.02f, crtTime / 0.1f);
+                    QTE_PromptTextUI.transform.localScale = new Vector3(_qteUIPromptOriginalScale.x, y * _qteUIPromptOriginalScale.y, _qteUIPromptOriginalScale.z);
+                    yield return null;
+                }
+
+                crtTime = 0f;
+                while (crtTime < 0.1f)
+                {
+                    crtTime += Time.unscaledDeltaTime;
+                    float x = Mathf.Lerp(1f, 0f, crtTime / 0.1f);
+                    QTE_PromptTextUI.transform.localScale = new Vector3(x * _qteUIPromptOriginalScale.x, 0.02f * _qteUIPromptOriginalScale.y, _qteUIPromptOriginalScale.z);
+                    yield return null;
+                }
+
+                QTE_PromptTextUI.SetActive(false);
+                QTE_PromptTextUI.transform.localScale = _qteUIPromptOriginalScale;
+            }
+
             Time.timeScale = 1f;
 
             if (QTE_PromptTextUI != null)
@@ -1747,10 +2387,6 @@ namespace TheGlitch
             Debug.Log("【重启】Boss 杀毒完毕，开始下一轮扫描！");
         }
 
-
-        // ==========================================
-        // 【新增】：“皮筋拖拽式”残影生成器 (Elastic Glitch Afterimage)
-        // ==========================================
         private IEnumerator SpawnAfterimageRoutine(Transform target)
         {
             if (target == null) yield break;
@@ -1759,15 +2395,12 @@ namespace TheGlitch
             System.Collections.Generic.List<GameObject> ghosts = new System.Collections.Generic.List<GameObject>();
             System.Collections.Generic.List<Mesh> bakedMeshes = new System.Collections.Generic.List<Mesh>();
 
-            // 记录初始位置和拖拽的目标位置
             System.Collections.Generic.List<Vector3> startPositions = new System.Collections.Generic.List<Vector3>();
             System.Collections.Generic.List<Vector3> pullTargetPositions = new System.Collections.Generic.List<Vector3>();
 
-            // 【修改 3】：完全抛弃旧材质，用代码凭空捏一个兼容性极强、自带发光的纯色渲染器
             Shader defaultShader = Shader.Find("Sprites/Default");
             if (defaultShader == null) defaultShader = Shader.Find("Unlit/Transparent");
 
-            // 这一次的拖拽方向和距离（离得近一点，在 0.3 到 0.8 米之间随机）
             Vector3 pullOffset = Random.onUnitSphere * Random.Range(0.3f, 0.8f);
 
             foreach (Renderer r in renderers)
@@ -1789,13 +2422,12 @@ namespace TheGlitch
                         GameObject ghost = new GameObject("GlitchGhost");
                         ghost.transform.position = r.transform.position;
                         ghost.transform.rotation = r.transform.rotation;
-                        ghost.transform.localScale = r.transform.lossyScale * 1.02f; // 只比原版大一丝丝，显得更紧凑
+                        ghost.transform.localScale = r.transform.lossyScale * 1.02f;
 
                         MeshFilter mf = ghost.AddComponent<MeshFilter>();
                         mf.mesh = meshToDraw;
                         MeshRenderer mr = ghost.AddComponent<MeshRenderer>();
 
-                        // 赋予纯代码捏造的赛博故障色 (青色或洋红)
                         Material mat = new Material(defaultShader);
                         Color glitchColor = Random.value > 0.5f ? new Color(0f, 1f, 1f, 0.6f) : new Color(1f, 0f, 0.5f, 0.6f);
                         mat.color = glitchColor;
@@ -1808,7 +2440,6 @@ namespace TheGlitch
                 }
             }
 
-            // 皮筋拖拽动画的时间 (0.3秒完成：拉出 -> 弹回)
             float lifeTime = 0.3f;
             float t = 0;
             while (t < lifeTime)
@@ -1816,18 +2447,14 @@ namespace TheGlitch
                 t += Time.unscaledDeltaTime;
                 float progress = t / lifeTime;
 
-                // 【核心灵魂】：使用正弦波 (Sine Wave) 实现拉出又弹回的皮筋效果！
-                // 当 progress 从 0 涨到 1 时，Mathf.Sin 刚好画出一个 0 -> 1 -> 0 的完美拱形圆弧！
                 float elasticPull = Mathf.Sin(progress * Mathf.PI);
 
                 for (int i = 0; i < ghosts.Count; i++)
                 {
                     if (ghosts[i] != null)
                     {
-                        // 根据正弦波，把残影拉向偏移点，然后再拉回原点！
                         ghosts[i].transform.position = Vector3.Lerp(startPositions[i], pullTargetPositions[i], elasticPull);
 
-                        // 在弹回的后半段，渐渐消失隐形
                         Color c = ghosts[i].GetComponent<Renderer>().material.color;
                         c.a = Mathf.Lerp(0.6f, 0f, progress * progress);
                         ghosts[i].GetComponent<Renderer>().material.color = c;
@@ -1864,7 +2491,6 @@ namespace TheGlitch
         {
             _currentPhase = BossPhase.Phase3_Cinematic;
 
-            // 1. 等待反噬的疯狂抽搐表现
             Vector3 originalCorePos = BossCore.position;
             float spasmTime = 1.5f;
             while (spasmTime > 0)
@@ -1875,26 +2501,24 @@ namespace TheGlitch
             }
             BossCore.position = originalCorePos;
 
-            // 2. 黑屏剥夺操作权，切到核心升空特写
             if (ScreenFader.Instance != null)
             {
                 ScreenFader.Instance.DoFadeAndAction(() =>
                 {
                     if (P2_DynamicLockCamera) P2_DynamicLockCamera.Priority = 0;
                     if (P3_CoreAscendCamera) P3_CoreAscendCamera.Priority = 100;
-                    DisablePlayerAbilities(true); // 剥夺操作
+                    DisablePlayerAbilities(true);
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
                 });
                 yield return new WaitForSeconds(1.0f);
             }
 
-            // 3. 核心升空 + 散发高压电波 (全损震动)
-
-            // ==========================================
-            // 【新增】：狂风起！能量爆发！
             if (GlobalWindParticles != null) GlobalWindParticles.Play();
             if (CoreEnergyParticles != null) CoreEnergyParticles.Play();
-            // ==========================================
-
 
             Vector3 ascendTarget = P3_CoreAscendPos != null ? P3_CoreAscendPos.position : originalCorePos + Vector3.up * 8f;
             float ascendDuration = 4f;
@@ -1904,14 +2528,12 @@ namespace TheGlitch
                 t += Time.deltaTime;
                 BossCore.position = Vector3.Lerp(originalCorePos, ascendTarget, Mathf.SmoothStep(0, 1, t / ascendDuration));
 
-                // 代表核心在散发让人无法靠近的威压，屏幕疯狂颤抖
                 RawCameraShake.Shake(0.08f, 0.15f);
                 yield return null;
             }
 
             yield return new WaitForSeconds(1f);
 
-            // 4. 第二次黑屏，切回玩家视角（第一阶段推近）
             if (ScreenFader.Instance != null)
             {
                 ScreenFader.Instance.DoFadeAndAction(() =>
@@ -1924,23 +2546,19 @@ namespace TheGlitch
                         CharacterController cc = _player.GetComponent<CharacterController>();
                         if (cc != null) cc.enabled = false;
 
-                        _player.transform.position = P3_PlayerStartPos.position;
+                        _player.transform.position = P3_PlayerStartPos.position + Vector3.up * 0.1f;
                         _player.transform.rotation = P3_PlayerStartPos.rotation;
 
                         if (cc != null) cc.enabled = true;
                     }
 
-                    // ==========================================
-                    // 【神级细节】：黑屏瞬间直接让主角进入挣扎姿态！
                     if (_playerAnimator != null)
                     {
                         _playerAnimator.enabled = true;
                         _playerAnimator.Play("StruggleWalk", 0, 0f);
-                        _playerAnimator.speed = 0f; // 暂停在挣扎的第一帧，等待玩家按 A/D 键发力！
+                        _playerAnimator.speed = 0f;
                     }
-                    // ==========================================
 
-                    // 黑屏瞬间把第二阶段的柱子全部隐藏，清理战场！
                     if (P2_Pillars != null)
                     {
                         foreach (GameObject pillar in P2_Pillars)
@@ -1948,18 +2566,20 @@ namespace TheGlitch
                             if (pillar != null) pillar.SetActive(false);
                         }
                     }
+
+                    if (_mainCameraBrain != null)
+                    {
+                        _mainCameraBrain.DefaultBlend = default;
+                        StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
+                    }
                 });
                 yield return new WaitForSeconds(1.0f);
             }
 
-            // 5. 提醒玩家按 A 或 D 挣扎前进
             _currentPhase = BossPhase.Phase3_Walk1;
             ShowQTEPrompt("[A] / [D] Alternate steps to move forward!");
         }
 
-
-        // 通用的“玩家走一段路 -> 切下一个机位”的协程
-        // 【重构】：2秒定频脉冲 + E键只防守不前进
         private IEnumerator CinematicWalkRoutine(Transform targetPos, CinemachineCamera nextCamera, BossPhase nextPhase, bool firstStepWasLeft)
         {
             _currentPhase = BossPhase.Phase3_Cinematic;
@@ -1988,7 +2608,6 @@ namespace TheGlitch
 
                 bool expectLeft = !firstStepWasLeft;
 
-                // 【修改 1】：脉冲计时器设为绝对的 2.0 秒！
                 float pulseTimer = 2.0f;
                 ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
 
@@ -1996,17 +2615,14 @@ namespace TheGlitch
 
                 while (targetProgress < totalSteps || currentProgress < totalSteps - 0.1f)
                 {
-                    // === 1. 发射电磁波倒计时 ===
                     pulseTimer -= Time.deltaTime;
                     if (pulseTimer <= 0f && _currentPulseRadius < 0f)
                     {
-                        // 【修改 2】：一波结束后，严格等待 2.0 秒再发下一波！
                         pulseTimer = 2.0f;
                         _pulseHandledThisRound = false;
                         StartCoroutine(SpawnPulseVisualEffect());
                     }
 
-                    // === 2. 【核心】：雷达测距！计算波浪边缘离玩家还有多远 ===
                     bool isPulseIncoming = false;
 
                     if (_currentPulseRadius > 0f && !_pulseHandledThisRound)
@@ -2017,10 +2633,9 @@ namespace TheGlitch
 
                         float distanceToWave = distToPlayer - _currentPulseRadius;
 
-                        // 判定 A：波浪逼近，进入格挡窗口期！（距离玩家 8 米内）
                         if (distanceToWave <= 8.0f && distanceToWave >= 0f)
                         {
-                            isPulseIncoming = true; // 锁定迈步
+                            isPulseIncoming = true;
 
                             if (Mathf.FloorToInt(Time.time * 15) % 2 == 0)
                                 ShowQTEPrompt("<color=red> Pulse is coming! Press [E] !</color>");
@@ -2029,17 +2644,12 @@ namespace TheGlitch
 
                             if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
                             {
-                                _pulseHandledThisRound = true; // 完美格挡！
+                                _pulseHandledThisRound = true;
                                 Debug.Log("<color=cyan>成功驱散脉冲！格挡成功，留在原地！</color>");
                                 RawCameraShake.Shake(0.3f, 0.2f);
-
-                                // 【修改 3】：删除了奖励前进的代码，现在只格挡，不前进！
-                                // targetProgress = Mathf.Min(totalSteps, targetProgress + 1.5f); 
-
                                 ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
                             }
                         }
-                        // 判定 B：波浪越过了玩家（距离 < 0），且玩家没格挡 -> 挨打被击退！
                         else if (distanceToWave < 0f)
                         {
                             _pulseHandledThisRound = true;
@@ -2050,7 +2660,6 @@ namespace TheGlitch
                         }
                     }
 
-                    // === 3. 走路输入逻辑 (电磁波警告期间必须专注按E，不能按AD) ===
                     if (Keyboard.current != null && !isPulseIncoming)
                     {
                         bool pressedA = Keyboard.current.aKey.wasPressedThisFrame;
@@ -2074,7 +2683,6 @@ namespace TheGlitch
                         }
                     }
 
-                    // === 4. 物理平滑移动与倒放动画 ===
                     if (currentProgress != targetProgress)
                     {
                         float moveDir = targetProgress > currentProgress ? 1f : -1f;
@@ -2119,8 +2727,6 @@ namespace TheGlitch
         }
         #endregion
         #region Visual Effects (第三阶段视觉特效)
-        // 动态生成一个贴地扩散的扁平扫描盘
-        // 动态生成一个贴地扩散的扁平扫描盘
         private IEnumerator SpawnPulseVisualEffect()
         {
             if (BossCore == null || _player == null) yield break;
@@ -2128,8 +2734,6 @@ namespace TheGlitch
             GameObject pulseDisc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             Destroy(pulseDisc.GetComponent<Collider>());
 
-            // 【修改 1】：高度既然变了，位置也要稍微往上抬一点，让光环贴着地
-            // 假设光环 1.5 米高，中心点就在 y + 0.75f 的位置
             pulseDisc.transform.position = new Vector3(BossCore.position.x, _player.transform.position.y + 0.75f, BossCore.position.z);
 
             Renderer r = pulseDisc.GetComponent<Renderer>();
@@ -2139,8 +2743,6 @@ namespace TheGlitch
             float duration = 2.5f;
             float t = 0;
 
-            // 【修改 2】：把高度(Y)从 0.05f 改成 1.5f ！！
-            // 这样侧面就会有一堵 1.5 米高的透明光墙扫过来，心电图波浪绝对清晰可见！
             Vector3 startScale = new Vector3(1f, 1.5f, 1f);
             Vector3 endScale = new Vector3(100f, 1.5f, 100f);
 
@@ -2162,23 +2764,26 @@ namespace TheGlitch
             Destroy(pulseDisc);
         }
         #endregion
-        #region Tools & UI (保持不变)
+        #region Tools & UI
         private IEnumerator CinematicCameraPan(Transform target, float transitionTime, float endSlowMoScale)
         {
             DisablePlayerAbilities(true);
             if (QTE_CloseUpCamera == null || target == null) yield break;
-            CinemachineBlendDefinition oldBlend = default;
+
             if (_mainCameraBrain != null)
             {
-                oldBlend = _mainCameraBrain.DefaultBlend;
                 _mainCameraBrain.DefaultBlend = default;
+                StartCoroutine(RestoreBlendNextFrame(_initialCameraBlend));
             }
+
             if (!QTE_CloseUpCamera.gameObject.activeSelf) QTE_CloseUpCamera.gameObject.SetActive(true);
             QTE_CloseUpCamera.transform.position = Camera.main.transform.position;
             QTE_CloseUpCamera.transform.rotation = Camera.main.transform.rotation;
             QTE_CloseUpCamera.Priority = 200;
+
             yield return new WaitForEndOfFrame();
             yield return new WaitForEndOfFrame();
+
             float t = 0f;
             Vector3 startPos = QTE_CloseUpCamera.transform.position;
             Quaternion startRot = QTE_CloseUpCamera.transform.rotation;
@@ -2190,7 +2795,6 @@ namespace TheGlitch
                 QTE_CloseUpCamera.transform.rotation = Quaternion.Lerp(startRot, target.rotation, progress);
                 yield return null;
             }
-            if (_mainCameraBrain != null) _mainCameraBrain.DefaultBlend = oldBlend;
             Time.timeScale = endSlowMoScale;
         }
 
@@ -2243,21 +2847,52 @@ namespace TheGlitch
         }
 
         private void HideQTEPrompt() => QTE_PromptTextUI?.SetActive(false);
+
+        // ==========================================
+        // 【UI 缩放动画】：仅保留唯一的一份！
+        // ==========================================
+        private void ApplyUIPunch(float gaugePercent)
+        {
+            float punchMultiplier = Mathf.Lerp(1.1f, 1.6f, gaugePercent);
+            if (QTE_PromptTextUI != null)
+            {
+                _currentUIPromptScale = _qteUIPromptOriginalScale * punchMultiplier;
+                QTE_PromptTextUI.transform.localScale = _currentUIPromptScale;
+            }
+            if (QTE_ProgressBar != null)
+            {
+                _currentUIBarScale = _qteUIBarOriginalScale * punchMultiplier;
+                QTE_ProgressBar.transform.localScale = _currentUIBarScale;
+            }
+        }
+
+        private void RecoverUIPunch()
+        {
+            if (QTE_PromptTextUI != null)
+            {
+                _currentUIPromptScale = Vector3.Lerp(_currentUIPromptScale, _qteUIPromptOriginalScale, Time.unscaledDeltaTime * 15f);
+                QTE_PromptTextUI.transform.localScale = _currentUIPromptScale;
+            }
+            if (QTE_ProgressBar != null)
+            {
+                _currentUIBarScale = Vector3.Lerp(_currentUIBarScale, _qteUIBarOriginalScale, Time.unscaledDeltaTime * 15f);
+                QTE_ProgressBar.transform.localScale = _currentUIBarScale;
+            }
+        }
         #endregion
+
         #region Ending Cinematic (大结局演出)
-        // 动态生成一个无敌全屏白光，随后切黑
         private IEnumerator WhiteoutEndingRoutine()
         {
-            // 1. 代码动态创建一个优先级最高的 Canvas，保证挡住全屏所有东西
             GameObject canvasObj = new GameObject("EndingWhiteoutCanvas");
             Canvas canvas = canvasObj.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            canvas.sortingOrder = 32767; // 最高层级
+            canvas.sortingOrder = 32767;
 
             GameObject imageObj = new GameObject("WhiteImage");
             imageObj.transform.SetParent(canvasObj.transform, false);
             Image img = imageObj.AddComponent<Image>();
-            img.color = new Color(1f, 1f, 1f, 0f); // 初始全透明
+            img.color = new Color(1f, 1f, 1f, 0f);
 
             RectTransform rect = img.GetComponent<RectTransform>();
             rect.anchorMin = Vector2.zero;
@@ -2265,8 +2900,6 @@ namespace TheGlitch
             rect.offsetMin = Vector2.zero;
             rect.offsetMax = Vector2.zero;
 
-            // 2. 接触瞬间：极速致盲的白光爆炸 (0.1秒)
-            // 这里只给一个瞬间的微弱碰撞震动，代表核心撞到了玩家
             RawCameraShake.Shake(0.4f, 0.2f);
 
             float t = 0;
@@ -2279,17 +2912,14 @@ namespace TheGlitch
             }
             img.color = Color.white;
 
-            // 3. 保持刺眼的白屏 2.5 秒钟 (让玩家在无BGM的静音中感受震撼)
             yield return new WaitForSecondsRealtime(2.5f);
 
-            // 4. 瞬间切成黑屏！
             img.color = Color.black;
 
             Debug.Log("<color=green>【结局】屏幕已黑！等待后续结局制作...</color>");
-
-            // 在这里你可以随意添加加载制作人员名单（Credits）或者返回主菜单的代码
         }
         #endregion
+
         #region Gizmos
         private void OnDrawGizmosSelected()
         {
@@ -2305,5 +2935,130 @@ namespace TheGlitch
             }
         }
         #endregion
+    }
+
+    // ==========================================
+    // 【全新黑客机制】：数据流闪现弹幕病毒脚本
+    // ==========================================
+    public class DataStreamProjectile : MonoBehaviour
+    {
+        private TextMeshPro[] _chars;
+        private Vector3[] _history;
+        private int _length = 12;
+        private float _lifeTime = 0f;
+        private bool _hasTeleported = false;
+
+        private void Start()
+        {
+            Renderer[] renderers = GetComponentsInChildren<Renderer>();
+            foreach (var r in renderers) r.enabled = false;
+
+            _chars = new TextMeshPro[_length];
+            _history = new Vector3[_length];
+
+            Color streamColor = Random.value > 0.5f ? new Color(0.1f, 1f, 0.2f, 0.9f) : new Color(0f, 0.7f, 0.1f, 0.9f);
+
+            for (int i = 0; i < _length; i++)
+            {
+                GameObject textObj = new GameObject("DataChar");
+                textObj.transform.position = transform.position;
+
+                TextMeshPro tmp = textObj.AddComponent<TextMeshPro>();
+                tmp.text = Random.value > 0.5f ? "0" : "1";
+
+                tmp.fontSize = Mathf.Lerp(10f, 4f, (float)i / _length);
+                tmp.alignment = TextAlignmentOptions.Center;
+
+                Color c = (i == 0) ? Color.white : streamColor;
+                c.a = Mathf.Lerp(1f, 0f, (float)i / _length);
+                tmp.color = c;
+
+                _chars[i] = tmp;
+                _history[i] = transform.position;
+            }
+        }
+
+        private void Update()
+        {
+            _lifeTime += Time.deltaTime;
+
+            if (!_hasTeleported && _lifeTime > 0.3f && Random.value < 0.05f)
+            {
+                _hasTeleported = true;
+                transform.position += transform.forward * 4.0f;
+
+                for (int i = 0; i < _length; i++)
+                {
+                    _history[i] = transform.position - transform.forward * (i * 0.3f) + Random.insideUnitSphere * 0.8f;
+                }
+            }
+        }
+
+        private void LateUpdate()
+        {
+            if (Vector3.Distance(_history[0], transform.position) > 0.2f)
+            {
+                for (int i = _length - 1; i > 0; i--)
+                {
+                    _history[i] = _history[i - 1];
+                }
+                _history[0] = transform.position;
+            }
+
+            for (int i = 0; i < _length; i++)
+            {
+                if (_chars[i] != null)
+                {
+                    Vector3 targetPos = _history[i] + Random.insideUnitSphere * 0.05f;
+                    _chars[i].transform.position = Vector3.Lerp(_chars[i].transform.position, targetPos, Time.deltaTime * 25f);
+
+                    if (Camera.main != null) _chars[i].transform.rotation = Camera.main.transform.rotation;
+
+                    if (Random.value < 0.1f) _chars[i].text = Random.value > 0.5f ? "0" : "1";
+                }
+            }
+        }
+
+        private void OnDestroy()
+        {
+            if (_chars != null)
+            {
+                foreach (var tmp in _chars)
+                {
+                    if (tmp != null)
+                    {
+                        tmp.gameObject.AddComponent<DataParticleFade>();
+                    }
+                }
+            }
+        }
+    }
+
+    public class DataParticleFade : MonoBehaviour
+    {
+        private TextMeshPro _tmp;
+        private float _timer = 0f;
+        private float _duration = 0.3f;
+
+        private void Start()
+        {
+            _tmp = GetComponent<TextMeshPro>();
+        }
+
+        private void Update()
+        {
+            _timer += Time.deltaTime;
+            if (_timer >= _duration)
+            {
+                Destroy(gameObject);
+                return;
+            }
+            if (_tmp != null)
+            {
+                Color c = _tmp.color;
+                c.a = Mathf.Lerp(c.a, 0f, _timer / _duration);
+                _tmp.color = c;
+            }
+        }
     }
 }

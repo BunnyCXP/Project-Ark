@@ -10,7 +10,7 @@ namespace TheGlitch
     {
         [Header("生命设置")]
         public int MaxHP = 3;
-        public float ReloadDelay = 1.0f;
+        public float ReloadDelay = 1.5f;
         public float InvincibleTimeAfterHit = 0.15f;
 
         [Header("受击反馈 (红屏)")]
@@ -19,9 +19,11 @@ namespace TheGlitch
         [Header("UI 设置")]
         public Slider PlayerHealthBar;
 
-        // 不再自动弹血条，只是纯粹的逻辑标志
         [HideInInspector]
         public bool IsInBossRoom = false;
+
+        public static Vector3? BossRespawnPosition = null;
+        public static Quaternion? BossRespawnRotation = null;
 
         private int _currentHP;
         private bool _isDead = false;
@@ -42,7 +44,6 @@ namespace TheGlitch
                 c.a = 0f;
                 DamageFlashUI.color = c;
             }
-
             InitHPUI();
         }
 
@@ -56,14 +57,15 @@ namespace TheGlitch
             _currentHP -= amount;
 
             UpdateHPUI();
-
             RawCameraShake.Shake(0.3f, 0.4f);
-
-            if (DamageFlashUI != null) StartCoroutine(FlashRedEffect());
 
             if (_currentHP <= 0)
             {
                 StartCoroutine(DeathRoutine());
+            }
+            else
+            {
+                if (DamageFlashUI != null) StartCoroutine(FlashRedEffect());
             }
         }
 
@@ -73,47 +75,35 @@ namespace TheGlitch
             {
                 PlayerHealthBar.maxValue = MaxHP;
                 PlayerHealthBar.value = _currentHP;
-                // 游戏刚开始探索时，强制隐藏玩家血条！
                 PlayerHealthBar.gameObject.SetActive(false);
             }
         }
 
-        // ==========================================
-        // 【新增】：专门给 Boss 导演调用的亮血条方法
-        // ==========================================
         public void ShowPlayerHealthBar()
         {
-            if (PlayerHealthBar != null)
-            {
-                PlayerHealthBar.gameObject.SetActive(true);
-            }
+            if (PlayerHealthBar != null) PlayerHealthBar.gameObject.SetActive(true);
         }
 
         private void UpdateHPUI()
         {
-            if (PlayerHealthBar != null)
-            {
-                PlayerHealthBar.value = _currentHP;
-            }
+            if (PlayerHealthBar != null) PlayerHealthBar.value = _currentHP;
         }
 
         private IEnumerator FlashRedEffect()
         {
-            Color c = DamageFlashUI.color;
-            c.a = 0.45f;
-            DamageFlashUI.color = c;
+            // 【神级修复 1】：强制重新赋予纯正的红色！
+            // 彻底解决复活后因为底层颜色残留导致“红屏变成黑屏”的隐形 Bug！
+            DamageFlashUI.color = new Color(1f, 0f, 0f, 0.45f);
 
             float elapsed = 0f;
             float duration = 0.3f;
             while (elapsed < duration)
             {
                 elapsed += Time.deltaTime;
-                c.a = Mathf.Lerp(0.45f, 0f, elapsed / duration);
-                DamageFlashUI.color = c;
+                DamageFlashUI.color = new Color(1f, 0f, 0f, Mathf.Lerp(0.45f, 0f, elapsed / duration));
                 yield return null;
             }
-            c.a = 0f;
-            DamageFlashUI.color = c;
+            DamageFlashUI.color = new Color(1f, 0f, 0f, 0f);
         }
 
         private IEnumerator DeathRoutine()
@@ -131,8 +121,54 @@ namespace TheGlitch
                 _starterInputs.enabled = false;
             }
 
-            yield return new WaitForSeconds(ReloadDelay);
-            SceneManager.LoadScene(SceneManager.GetActiveScene().buildIndex);
+            if (DamageFlashUI != null)
+            {
+                float elapsed = 0f;
+                float fadeTime = 1.0f;
+                while (elapsed < fadeTime)
+                {
+                    elapsed += Time.unscaledDeltaTime;
+                    DamageFlashUI.color = Color.Lerp(new Color(1f, 0f, 0f, 0.45f), Color.black, elapsed / fadeTime);
+                    yield return null;
+                }
+                DamageFlashUI.color = Color.black;
+            }
+
+            yield return new WaitForSecondsRealtime(ReloadDelay);
+
+            if (BossRespawnPosition.HasValue && BossRespawnRotation.HasValue)
+            {
+                CharacterController cc = GetComponent<CharacterController>();
+                if (cc != null) cc.enabled = false;
+                transform.position = BossRespawnPosition.Value;
+                transform.rotation = BossRespawnRotation.Value;
+                if (cc != null) cc.enabled = true;
+            }
+
+            _currentHP = MaxHP;
+            UpdateHPUI();
+            if (PlayerHealthBar != null) PlayerHealthBar.gameObject.SetActive(false);
+
+            MainframeBossManager boss = Object.FindFirstObjectByType<MainframeBossManager>();
+            if (boss != null) boss.SoftResetBoss(this.gameObject);
+
+            if (DamageFlashUI != null)
+            {
+                float elapsed = 0f;
+                float fadeTime = 1.0f;
+                while (elapsed < fadeTime)
+                {
+                    elapsed += Time.unscaledDeltaTime;
+                    DamageFlashUI.color = Color.Lerp(Color.black, new Color(0, 0, 0, 0), elapsed / fadeTime);
+                    yield return null;
+                }
+                DamageFlashUI.color = new Color(0, 0, 0, 0);
+            }
+
+            if (_thirdPerson != null) _thirdPerson.enabled = true;
+            if (_starterInputs != null) _starterInputs.enabled = true;
+
+            _isDead = false;
         }
     }
 

@@ -45,10 +45,6 @@ namespace TheGlitch
                 Destroy(gameObject); // 击中后销毁子弹
             }
         }
-        private void OnDestroy()
-        {
-            // 子弹临死前的遗言，帮你查出它飞了多远就被谁杀了
-            Debug.Log($"【抓鬼】子弹在距离老家 {Vector3.Distance(_startPos, transform.position)} 米的地方被销毁了！");
-        }
+
     }
 }
