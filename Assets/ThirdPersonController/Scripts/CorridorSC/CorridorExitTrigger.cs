@@ -158,7 +158,12 @@ public class CorridorExitTrigger : MonoBehaviour
                 if (lightObj != null) lightObj.SetActive(true);
             }
         }
+        // 1. 摧毁纯白环境
+        var animusEnv = Object.FindFirstObjectByType<TheGlitch.CyberspaceEnvironment>();
+        if (animusEnv != null) Destroy(animusEnv.gameObject);
 
+        // 2. 恢复相机的天空盒渲染
+        if (Camera.main != null) Camera.main.clearFlags = CameraClearFlags.Skybox;
         // 【新增逻辑】：瞬间切换天空盒并刷新环境光
         if (NewSkyboxMaterial != null)
         {

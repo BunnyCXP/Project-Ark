@@ -212,6 +212,8 @@ namespace TheGlitch
 
         private CinemachineBlendDefinition _initialCameraBlend;
 
+        private System.Collections.Generic.List<GameObject> _activeVFX = new System.Collections.Generic.List<GameObject>();
+
         private void Awake()
         {
             for (int i = 0; i < 2; i++)
@@ -425,8 +427,13 @@ namespace TheGlitch
         {
             if (QTE_PromptTextUI == null || QTE_TextComponent == null) yield break;
 
-            Vector2 originalPromptPos = QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition;
+            // 【新增】：确保 CanvasGroup 处于可见状态，防止与打字机特效冲突
+            CanvasGroup cg = QTE_PromptTextUI.GetComponent<CanvasGroup>();
+            if (cg == null) cg = QTE_PromptTextUI.AddComponent<CanvasGroup>();
+            cg.alpha = 1f;
+            QTE_TextComponent.maxVisibleCharacters = 99999;
 
+            Vector2 originalPromptPos = QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition;
             QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition = originalPromptPos + new Vector2(0, 300);
 
             QTE_PromptTextUI.SetActive(true);
@@ -463,7 +470,6 @@ namespace TheGlitch
             }
 
             QTE_PromptTextUI.SetActive(false);
-
             QTE_PromptTextUI.transform.localScale = _qteUIPromptOriginalScale;
             QTE_PromptTextUI.GetComponent<RectTransform>().anchoredPosition = originalPromptPos;
         }
@@ -602,14 +608,11 @@ namespace TheGlitch
             var projectiles = Object.FindObjectsByType<BossProjectile>(FindObjectsSortMode.None);
             foreach (var p in projectiles) Destroy(p.gameObject);
 
-            if (AoEWarningPrefab)
+            foreach (var vfx in _activeVFX)
             {
-                var allObjs = Object.FindObjectsByType<GameObject>(FindObjectsSortMode.None);
-                foreach (var obj in allObjs)
-                {
-                    if (obj.name.Contains(AoEWarningPrefab.name)) Destroy(obj);
-                }
+                if (vfx != null) Destroy(vfx);
             }
+            _activeVFX.Clear();
 
             if (P2_LaserRenderer) P2_LaserRenderer.gameObject.SetActive(false);
             if (LaserChargeFX) LaserChargeFX.Stop();
@@ -797,34 +800,89 @@ namespace TheGlitch
             if (projScript != null) projScript.Speed = ProjectileSpeed;
         }
 
+        private GameObject CreateRadarBracket(Transform parent, Color color)
+        {
+            GameObject bracket = new GameObject("RadarBracket");
+            bracket.transform.SetParent(parent);
+            bracket.transform.localPosition = Vector3.zero;
+
+            float thickness = 0.12f;
+            float length = 0.8f;
+
+            GameObject legX = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Destroy(legX.GetComponent<Collider>());
+            legX.transform.SetParent(bracket.transform);
+            legX.transform.localPosition = new Vector3(length / 2f, 0f, 0f);
+            legX.transform.localScale = new Vector3(length, thickness, thickness);
+            Renderer rX = legX.GetComponent<Renderer>();
+            rX.material = new Material(Shader.Find("Sprites/Default"));
+            rX.material.color = color;
+            rX.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            GameObject legZ = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Destroy(legZ.GetComponent<Collider>());
+            legZ.transform.SetParent(bracket.transform);
+            legZ.transform.localPosition = new Vector3(0f, 0f, length / 2f);
+            legZ.transform.localScale = new Vector3(thickness, thickness, length);
+            Renderer rZ = legZ.GetComponent<Renderer>();
+            rZ.material = new Material(Shader.Find("Sprites/Default"));
+            rZ.material.color = color;
+            rZ.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            return bracket;
+        }
+
         private IEnumerator SpawnAoE(Vector3 position, float dormantTime)
         {
             GameObject warning = null;
             Renderer warningRenderer = null;
             float targetDiameter = BombRadius * 2f;
 
-            // ==========================================
-            // 【新增】：雷达扫描线
-            // ==========================================
-            GameObject scannerLine = null;
+            GameObject radarGroup = new GameObject("RadarGroup");
+            radarGroup.transform.position = position;
+            _activeVFX.Add(radarGroup);
+
+            GameObject scannerGroup = new GameObject("ScannerGroup");
+            scannerGroup.transform.SetParent(radarGroup.transform);
+            scannerGroup.transform.localPosition = Vector3.zero;
+
+            float scanLength = targetDiameter * 1.1f;
+
+            GameObject scannerLine1 = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Destroy(scannerLine1.GetComponent<Collider>());
+            scannerLine1.transform.SetParent(scannerGroup.transform);
+            scannerLine1.transform.localPosition = new Vector3(0, 0.3f, 0);
+            scannerLine1.transform.localScale = new Vector3(0.1f, 0.1f, scanLength);
+            Renderer scanR1 = scannerLine1.GetComponent<Renderer>();
+            scanR1.material = new Material(Shader.Find("Sprites/Default"));
+            scanR1.material.color = new Color(0f, 1f, 1f, 0.6f);
+
+            GameObject scannerLine2 = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            Destroy(scannerLine2.GetComponent<Collider>());
+            scannerLine2.transform.SetParent(scannerGroup.transform);
+            scannerLine2.transform.localPosition = new Vector3(0, 0.3f, 0);
+            scannerLine2.transform.localScale = new Vector3(scanLength, 0.1f, 0.1f);
+            Renderer scanR2 = scannerLine2.GetComponent<Renderer>();
+            scanR2.material = new Material(Shader.Find("Sprites/Default"));
+            scanR2.material.color = new Color(0f, 1f, 1f, 0.6f);
+
+            scannerGroup.SetActive(false);
+
+            GameObject[] brackets = new GameObject[4];
+            for (int i = 0; i < 4; i++)
+            {
+                brackets[i] = CreateRadarBracket(radarGroup.transform, new Color(0f, 1f, 1f, 0.8f));
+                brackets[i].SetActive(false);
+            }
 
             if (AoEWarningPrefab != null)
             {
                 warning = Instantiate(AoEWarningPrefab, position, Quaternion.identity);
                 warning.transform.localScale = new Vector3(0, 0.1f, 0);
                 warningRenderer = warning.GetComponent<Renderer>();
+                _activeVFX.Add(warning);
 
                 if (warningRenderer != null) warningRenderer.material.color = new Color(0f, 1f, 1f, 0.1f);
-
-                scannerLine = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                Destroy(scannerLine.GetComponent<Collider>());
-                scannerLine.transform.SetParent(warning.transform);
-                scannerLine.transform.localPosition = new Vector3(0, 0.5f, 0);
-                scannerLine.transform.localScale = new Vector3(0.02f, 0.1f, 1f);
-                Renderer scanR = scannerLine.GetComponent<Renderer>();
-                scanR.material = new Material(Shader.Find("Sprites/Default"));
-                scanR.material.color = new Color(0f, 1f, 1f, 0.6f);
-                scannerLine.SetActive(false);
             }
 
             float expandTime = 0.3f;
@@ -842,7 +900,8 @@ namespace TheGlitch
                 yield return new WaitForSeconds(dormantTime);
             }
 
-            if (scannerLine != null) scannerLine.SetActive(true);
+            if (scannerGroup != null) scannerGroup.SetActive(true);
+            foreach (var b in brackets) if (b != null) b.SetActive(true);
 
             float t = 0f;
             Vector3 currentPos = position;
@@ -850,14 +909,40 @@ namespace TheGlitch
             while (t < WarningTime)
             {
                 t += Time.deltaTime;
+                float progress = t / WarningTime;
+
                 if (warning != null && _player != null)
                 {
                     Vector3 targetPos = _player.transform.position;
                     targetPos.y = position.y;
                     currentPos = Vector3.MoveTowards(currentPos, targetPos, Time.deltaTime * AoETrackingSpeed);
                     warning.transform.position = currentPos;
+                    radarGroup.transform.position = currentPos;
 
-                    if (scannerLine != null) scannerLine.transform.Rotate(Vector3.up, 360f * Time.deltaTime, Space.Self);
+                    if (scannerGroup != null) scannerGroup.transform.Rotate(Vector3.up, 360f * Time.deltaTime, Space.Self);
+
+                    float bracketDist = Mathf.Lerp(BombRadius * 1.5f, BombRadius * 0.4f, progress);
+
+                    if (brackets[0] != null)
+                    {
+                        brackets[0].transform.localPosition = new Vector3(bracketDist, 0.4f, bracketDist);
+                        brackets[0].transform.localRotation = Quaternion.Euler(0, 180, 0);
+                    }
+                    if (brackets[1] != null)
+                    {
+                        brackets[1].transform.localPosition = new Vector3(bracketDist, 0.4f, -bracketDist);
+                        brackets[1].transform.localRotation = Quaternion.Euler(0, -90, 0);
+                    }
+                    if (brackets[2] != null)
+                    {
+                        brackets[2].transform.localPosition = new Vector3(-bracketDist, 0.4f, -bracketDist);
+                        brackets[2].transform.localRotation = Quaternion.Euler(0, 0, 0);
+                    }
+                    if (brackets[3] != null)
+                    {
+                        brackets[3].transform.localPosition = new Vector3(-bracketDist, 0.4f, bracketDist);
+                        brackets[3].transform.localRotation = Quaternion.Euler(0, 90, 0);
+                    }
 
                     if (warningRenderer != null)
                     {
@@ -868,17 +953,28 @@ namespace TheGlitch
                 yield return null;
             }
 
-            if (scannerLine != null) Destroy(scannerLine);
-
             if (warning != null)
             {
                 warning.transform.localScale = new Vector3(targetDiameter, 0.1f, targetDiameter);
-                if (warningRenderer != null) warningRenderer.material.color = new Color(1f, 0f, 0f, 0.8f);
+                if (warningRenderer != null) warningRenderer.material.color = new Color(1f, 0f, 0f, 0.4f);
+
+                foreach (var b in brackets)
+                {
+                    if (b != null)
+                    {
+                        Renderer[] rs = b.GetComponentsInChildren<Renderer>();
+                        foreach (var r in rs) r.material.color = Color.red;
+
+                        b.transform.localScale = Vector3.one * 1.4f;
+                    }
+                }
+                Renderer[] scanRs = scannerGroup.GetComponentsInChildren<Renderer>();
+                foreach (var r in scanRs) r.material.color = Color.red;
             }
 
-            RawCameraShake.Shake(0.15f, 0.1f);
+            RawCameraShake.Shake(0.2f, 0.1f);
 
-            yield return new WaitForSeconds(0.5f);
+            yield return new WaitForSeconds(0.4f);
 
             if (warning != null)
             {
@@ -887,56 +983,145 @@ namespace TheGlitch
                 StartCoroutine(SpawnOrbitalLaserFX(warning.transform.position, targetDiameter));
             }
 
-            RawCameraShake.Shake(0.6f, 0.4f);
+            RawCameraShake.Shake(0.6f, 0.45f);
 
-            yield return new WaitForSeconds(0.15f);
-            if (warning != null) Destroy(warning);
+            yield return new WaitForSeconds(0.1f);
+            if (warning != null)
+            {
+                _activeVFX.Remove(warning);
+                Destroy(warning);
+            }
+            if (radarGroup != null)
+            {
+                _activeVFX.Remove(radarGroup);
+                Destroy(radarGroup);
+            }
+        }
+
+        private LineRenderer CreateCodeRing(Vector3 pos, float width, Color color)
+        {
+            GameObject ringObj = new GameObject("ShockwaveRing");
+            ringObj.transform.position = pos + Vector3.up * 0.15f;
+            _activeVFX.Add(ringObj);
+
+            LineRenderer lr = ringObj.AddComponent<LineRenderer>();
+            lr.useWorldSpace = false;
+            lr.loop = true;
+            lr.startWidth = width;
+            lr.endWidth = width;
+            lr.positionCount = 36;
+            lr.material = new Material(Shader.Find("Sprites/Default"));
+            lr.material.color = color;
+            lr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            return lr;
         }
 
         private IEnumerator SpawnOrbitalLaserFX(Vector3 pos, float size)
         {
-            GameObject laser = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            Destroy(laser.GetComponent<Collider>());
+            GameObject preLaser = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Destroy(preLaser.GetComponent<Collider>());
+            preLaser.transform.position = pos + Vector3.up * 20f;
+            preLaser.transform.localScale = new Vector3(0.2f, 20f, 0.2f);
+            Renderer preR = preLaser.GetComponent<Renderer>();
+            preR.material = new Material(Shader.Find("Sprites/Default"));
+            preR.material.color = Color.white;
+            _activeVFX.Add(preLaser);
 
-            laser.transform.position = pos + Vector3.up * 20f;
-            laser.transform.localScale = new Vector3(size * 0.8f, 20f, size * 0.8f);
+            yield return new WaitForSeconds(0.1f);
+            Destroy(preLaser);
 
-            Renderer laserR = laser.GetComponent<Renderer>();
-            laserR.material = new Material(Shader.Find("Sprites/Default"));
-            laserR.material.color = new Color(1f, 1f, 1f, 1f);
+            GameObject mainLaser = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            Destroy(mainLaser.GetComponent<Collider>());
+            mainLaser.transform.position = pos + Vector3.up * 20f;
+            mainLaser.transform.localScale = new Vector3(size * 0.9f, 20f, size * 0.9f);
+            Renderer mainR = mainLaser.GetComponent<Renderer>();
+            mainR.material = new Material(Shader.Find("Sprites/Default"));
+            mainR.material.color = new Color(1f, 0f, 0.1f, 0.9f);
+            _activeVFX.Add(mainLaser);
 
-            GameObject boom = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            Destroy(boom.GetComponent<Collider>());
-            boom.transform.position = pos + Vector3.up * 0.2f;
-            boom.transform.localScale = new Vector3(size, 0.01f, size);
+            LineRenderer ring1 = CreateCodeRing(pos, 0.6f, new Color(1f, 0.1f, 0.1f, 1f));
+            LineRenderer ring2 = CreateCodeRing(pos, 0.2f, new Color(1f, 1f, 1f, 1f));
 
-            Renderer boomR = boom.GetComponent<Renderer>();
-            boomR.material = new Material(Shader.Find("Sprites/Default"));
-            boomR.material.color = new Color(1f, 0.1f, 0.1f, 1f);
+            int voxelCount = 20;
+            GameObject[] voxels = new GameObject[voxelCount];
+            Vector3[] vVels = new Vector3[voxelCount];
+
+            for (int i = 0; i < voxelCount; i++)
+            {
+                voxels[i] = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                Destroy(voxels[i].GetComponent<Collider>());
+                _activeVFX.Add(voxels[i]);
+
+                voxels[i].transform.position = pos + Random.insideUnitSphere * (size * 0.4f);
+                voxels[i].transform.position = new Vector3(voxels[i].transform.position.x, pos.y + Random.Range(0.2f, 1f), voxels[i].transform.position.z);
+                voxels[i].transform.localScale = Vector3.one * Random.Range(0.15f, 0.4f);
+                voxels[i].transform.rotation = Random.rotation;
+
+                Renderer vr = voxels[i].GetComponent<Renderer>();
+                vr.material = new Material(Shader.Find("Sprites/Default"));
+                vr.material.color = Random.value > 0.5f ? new Color(1f, 0f, 0.2f, 1f) : Color.white;
+
+                vVels[i] = (Random.insideUnitSphere * 0.5f + Vector3.up).normalized * Random.Range(8f, 18f);
+            }
 
             float t = 0;
-            float duration = 0.5f;
+            float duration = 0.6f;
             while (t < duration)
             {
                 t += Time.deltaTime;
                 float progress = t / duration;
                 float easeOut = 1f - (1f - progress) * (1f - progress);
 
-                Color laserColor = Color.Lerp(Color.white, new Color(1f, 0f, 0f, 0f), easeOut);
-                laserR.material.color = laserColor;
-                float laserWidth = Mathf.Lerp(size * 0.8f, 0f, easeOut);
-                laser.transform.localScale = new Vector3(laserWidth, 20f, laserWidth);
+                if (mainLaser != null)
+                {
+                    float curWidth = Mathf.Lerp(size * 0.9f, 0f, easeOut);
+                    mainLaser.transform.localScale = new Vector3(curWidth, 20f, curWidth);
+                    Color c = mainR.material.color;
+                    c.a = Mathf.Lerp(0.9f, 0f, progress);
+                    mainR.material.color = c;
+                }
 
-                boom.transform.localScale = new Vector3(size * (1f + easeOut * 1.5f), 0.01f, size * (1f + easeOut * 1.5f));
-                Color boomColor = boomR.material.color;
-                boomColor.a = Mathf.Lerp(1f, 0f, easeOut);
-                boomR.material.color = boomColor;
+                if (ring1 != null && ring2 != null)
+                {
+                    float r1 = Mathf.Lerp(size * 0.5f, size * 2.5f, easeOut);
+                    float r2 = Mathf.Lerp(size * 0.5f, size * 1.5f, progress);
+
+                    for (int i = 0; i < 36; i++)
+                    {
+                        float angle = i * Mathf.PI * 2f / 36f;
+                        ring1.SetPosition(i, new Vector3(Mathf.Cos(angle) * r1, 0, Mathf.Sin(angle) * r1));
+                        ring2.SetPosition(i, new Vector3(Mathf.Cos(angle) * r2, 0, Mathf.Sin(angle) * r2));
+                    }
+
+                    Color c1 = ring1.material.color; c1.a = Mathf.Lerp(1f, 0f, easeOut); ring1.material.color = c1;
+                    Color c2 = ring2.material.color; c2.a = Mathf.Lerp(1f, 0f, easeOut); ring2.material.color = c2;
+                }
+
+                for (int i = 0; i < voxelCount; i++)
+                {
+                    if (voxels[i] != null)
+                    {
+                        voxels[i].transform.position += vVels[i] * Time.deltaTime;
+                        vVels[i].y -= 35f * Time.deltaTime;
+
+                        voxels[i].transform.Rotate(vVels[i] * Time.deltaTime * 20f);
+
+                        float vScale = Mathf.Lerp(1f, 0f, progress * progress);
+                        voxels[i].transform.localScale = Vector3.one * (vScale * 0.4f);
+                    }
+                }
 
                 yield return null;
             }
 
-            Destroy(laser);
-            Destroy(boom);
+            if (mainLaser != null) { _activeVFX.Remove(mainLaser); Destroy(mainLaser); }
+            if (ring1 != null) { _activeVFX.Remove(ring1.gameObject); Destroy(ring1.gameObject); }
+            if (ring2 != null) { _activeVFX.Remove(ring2.gameObject); Destroy(ring2.gameObject); }
+            for (int i = 0; i < voxelCount; i++)
+            {
+                if (voxels[i] != null) { _activeVFX.Remove(voxels[i]); Destroy(voxels[i]); }
+            }
         }
 
         private void ApplyBombDamage(Vector3 position)
@@ -1108,17 +1293,21 @@ namespace TheGlitch
 
                     if (bootTime > 0)
                     {
-                        uiText += $"<align=center><color=red><b>[ INITIALIZING VULNERABILITY... ]</b></color>\n";
-                        uiText += $"<size=20>ACCESSING NODE DATA...</size></align>\n\n";
+                        uiText += $"<align=center><size=35><color=red><b>[ INITIALIZING VULNERABILITY... ]</b></color></size>\n";
+                        uiText += $"<size=22>ACCESSING NODE DATA...</size></align>\n\n";
                         bootTime -= 0.05f;
                     }
                     else
                     {
-                        uiText += $"<align=center><color=#00FF55><b>/// DATA EXTRACTION ///</b></color>\n";
-                        uiText += $"<size=20>TIME: {_p1HackTimer:F1}s   |   PACKETS: {_p1FoodCollected} / {P1_FoodRequired}</size></align>\n\n";
+                        uiText += $"<align=center><size=35><color=#00FF55><b>/// DATA EXTRACTION ///</b></color></size>\n";
+                        uiText += $"<size=22>TIME: {_p1HackTimer:F1}s   |   PACKETS: {_p1FoodCollected} / {P1_FoodRequired}</size></align>\n\n";
                     }
 
-                    uiText += "<align=center><size=26><line-height=100%><mspace=40>";
+                    // ==========================================
+                    // 【终极美化】：字号调为 32，行距保持完美间隙，间距压缩到 50！
+                    // 现在的网格绝对会稳如泰山地居中显示在你的全息画板上，绝不会超出底部！
+                    // ==========================================
+                    uiText += "<align=center><size=32><line-height=100%><mspace=50>";
                     for (int y = _p1GridHeight - 1; y >= 0; y--)
                     {
                         for (int x = 0; x < _p1GridWidth; x++)
@@ -1153,11 +1342,11 @@ namespace TheGlitch
                             }
                             else if (_p1EatenPositions.Contains(currentCell))
                             {
-                                uiText += "<color=#00FF55>+</color>";
+                                uiText += "<color=#00FF55>┼</color>";
                             }
                             else
                             {
-                                uiText += "<color=#2A5555>+</color>";
+                                uiText += "<color=#1A3A3A>┼</color>";
                             }
                         }
                         uiText += "\n";
@@ -1678,7 +1867,6 @@ namespace TheGlitch
 
                         _p2HackGauge += Time.deltaTime;
                         if (QTE_ProgressBar != null) QTE_ProgressBar.value = _p2HackGauge;
-                        ApplyUIPunch(_p2HackGauge / P3_ExecutionTimeRequired);
 
                         float pullProgress = Mathf.Clamp01(_p2HackGauge / P3_ExecutionTimeRequired);
 
@@ -1751,7 +1939,6 @@ namespace TheGlitch
                         }
                     }
 
-                    // 【注意】：此处仅用于第三阶段长按 E 时更新 UI 动画缩放
                     RecoverUIPunch();
                     break;
             }
@@ -1759,6 +1946,7 @@ namespace TheGlitch
         #endregion
 
         #region Phase 2 Hacking Logic
+     
         private void HandleP2Hacking()
         {
             if (_player == null || _pillarStates == null) return;
@@ -1781,7 +1969,9 @@ namespace TheGlitch
 
             if (nearestExposedIndex != -1)
             {
-                ShowQTEPrompt("[PRESS E] HACK FIREWALL");
+                // 【调用 Style 2】：悬浮在目标柱子上方！加入了 P2_HACK 作为ID防止重复动画
+                string p2Text = "<size=20><color=#00FFFF> TARGET_LOCKED </color></size>\n<color=#FFFFFF><size=45><b>[ E ]</b></size></color> <color=#00FFFF>OVERRIDE</color>";
+                ShowQTEPrompt(p2Text, 2, P2_Pillars[nearestExposedIndex].transform, "P2_HACK");
 
                 if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
                 {
@@ -1794,7 +1984,6 @@ namespace TheGlitch
                 HideQTEPrompt();
                 if (QTE_ProgressBar != null) QTE_ProgressBar.gameObject.SetActive(false);
             }
-            // 顺便在这里调用 RecoverUIPunch 让 QTE 提示的弹跳恢复
             RecoverUIPunch();
         }
 
@@ -2025,8 +2214,11 @@ namespace TheGlitch
             RectTransform bgRT = bg.rectTransform;
             bgRT.anchorMin = new Vector2(0.5f, 0.5f);
             bgRT.anchorMax = new Vector2(0.5f, 0.5f);
-            bgRT.sizeDelta = new Vector2(1000, 320);
-            bgRT.anchoredPosition = new Vector2(0, -280);
+            // ==========================================
+            // 【UI居中微调】：把画板往上抬一点点（改为-200），保证不超出底边
+            bgRT.sizeDelta = new Vector2(900, 320);
+            bgRT.anchoredPosition = new Vector2(0, -200);
+            // ==========================================
 
             int hexOffset = 40;
 
@@ -2217,6 +2409,8 @@ namespace TheGlitch
         {
             _currentPhase = BossPhase.Phase2_Stunned;
             if (P2_LaserRenderer != null) P2_LaserRenderer.gameObject.SetActive(false);
+            // 【终极修复】：强制停止 LaserChargeFX，防止带入第三阶段！
+            if (LaserChargeFX != null) LaserChargeFX.Stop();
 
             bool allHacked = true;
             for (int i = 0; i < _pillarStates.Length; i++)
@@ -2577,7 +2771,9 @@ namespace TheGlitch
             }
 
             _currentPhase = BossPhase.Phase3_Walk1;
-            ShowQTEPrompt("[A] / [D] Alternate steps to move forward!");
+
+            // 【UI修改】：调用 style 1 位于屏幕底部
+            ShowQTEPrompt("<color=#00FFFF><b>[ A ] / [ D ]</b> MANUAL OVERRIDE</color>", 1);
         }
 
         private IEnumerator CinematicWalkRoutine(Transform targetPos, CinemachineCamera nextCamera, BossPhase nextPhase, bool firstStepWasLeft)
@@ -2607,9 +2803,14 @@ namespace TheGlitch
                 float currentProgress = 0f;
 
                 bool expectLeft = !firstStepWasLeft;
-
                 float pulseTimer = 2.0f;
-                ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+
+                // 【精简高科技文案】
+                string promptLeft = "<color=#00FF55><b>[ A ]</b> LEFT SERVO</color>";
+                string promptRight = "<color=#00FF55><b>[ D ]</b> RIGHT SERVO</color>";
+
+                // 调用 Style 1，放在屏幕底部 HUD 区域
+                ShowQTEPrompt(expectLeft ? promptLeft : promptRight, 1, null, expectLeft ? "L" : "R");
 
                 yield return null;
 
@@ -2637,26 +2838,24 @@ namespace TheGlitch
                         {
                             isPulseIncoming = true;
 
-                            if (Mathf.FloorToInt(Time.time * 15) % 2 == 0)
-                                ShowQTEPrompt("<color=red> Pulse is coming! Press [E] !</color>");
-                            else
-                                ShowQTEPrompt("<color=white> Pulse is coming! Press [E] !</color>");
+                            // 【红白闪烁的 EMP 警告，不重置打字机动画】
+                            string alertColor = (Mathf.FloorToInt(Time.time * 15) % 2 == 0) ? "#FF0000" : "#FFFFFF";
+                            string alertText = $"<color={alertColor}>!! EMP SURGE INBOUND : TAP <b>[ E ]</b> TO BRACE</color>";
+                            ShowQTEPrompt(alertText, 1, null, "EMP_WARN");
 
                             if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
                             {
                                 _pulseHandledThisRound = true;
-                                Debug.Log("<color=cyan>成功驱散脉冲！格挡成功，留在原地！</color>");
                                 RawCameraShake.Shake(0.3f, 0.2f);
-                                ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+                                ShowQTEPrompt(expectLeft ? promptLeft : promptRight, 1, null, expectLeft ? "L" : "R");
                             }
                         }
                         else if (distanceToWave < 0f)
                         {
                             _pulseHandledThisRound = true;
-                            Debug.Log("<color=red>Struck by electromagnetic waves! Defused!</color>");
                             RawCameraShake.Shake(1.0f, 0.5f);
                             targetProgress = Mathf.Max(0, targetProgress - 1.5f);
-                            ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+                            ShowQTEPrompt(expectLeft ? promptLeft : promptRight, 1, null, expectLeft ? "L" : "R");
                         }
                     }
 
@@ -2672,13 +2871,13 @@ namespace TheGlitch
                                 expectLeft = !expectLeft;
                                 targetProgress = Mathf.Min(totalSteps, targetProgress + 1f);
                                 RawCameraShake.Shake(0.08f, 0.1f);
-                                ShowQTEPrompt(expectLeft ? "[A] Move Your Left" : "[D] Move Your Right");
+                                ShowQTEPrompt(expectLeft ? promptLeft : promptRight, 1, null, expectLeft ? "L" : "R");
                             }
                             else
                             {
                                 RawCameraShake.Shake(0.2f, 0.2f);
                                 targetProgress = Mathf.Max(0, targetProgress - 0.6f);
-                                ShowQTEPrompt("<color=yellow>Stagger! Be careful to alternate between your left and right feet.</color>");
+                                ShowQTEPrompt("<color=#FF0055>[!] MOTOR DESYNC : ALTERNATE STEPS</color>", 1, null, "DESYNC");
                             }
                         }
                     }
@@ -2720,10 +2919,11 @@ namespace TheGlitch
             yield return new WaitForEndOfFrame();
             _currentPhase = nextPhase;
 
+            // 【UI修改】：最终处决与过场
             if (nextPhase == BossPhase.Phase3_Execution)
-                ShowQTEPrompt("[HOLD E] Do It!");
+                ShowQTEPrompt("<color=#FF0055><b>[ HOLD E ]</b> EXTRACT CORE</color>", 1);
             else
-                ShowQTEPrompt("[A] / [D] Keeping On!");
+                ShowQTEPrompt("<color=#00FFFF><b>[ A ] / [ D ]</b> CONTINUE</color>", 1);
         }
         #endregion
         #region Visual Effects (第三阶段视觉特效)
@@ -2836,21 +3036,129 @@ namespace TheGlitch
             }
         }
 
-        private void ShowQTEPrompt(string text)
+        // ==========================================
+        // 【新增】：UI 动效状态控制器
+        // ==========================================
+        private string _lastPromptId = "";
+        private Coroutine _qteAnimRoutine;
+        private bool _isHidingQTE = false;
+
+        private void ShowQTEPrompt(string text, int style = 0, Transform target = null, string id = null)
         {
-            if (QTE_PromptTextUI)
+            if (QTE_PromptTextUI == null || QTE_TextComponent == null) return;
+
+            string currentId = string.IsNullOrEmpty(id) ? text : id;
+
+            // 只有在 ID 改变、或者正在隐藏时，才重新触发打字机动画！
+            if (!QTE_PromptTextUI.activeSelf || _lastPromptId != currentId || _isHidingQTE)
             {
+                _isHidingQTE = false;
                 QTE_PromptTextUI.SetActive(true);
-                QTE_PromptTextUI.transform.localScale = _qteUIPromptOriginalScale;
+                _lastPromptId = currentId;
+
+                if (_qteAnimRoutine != null) StopCoroutine(_qteAnimRoutine);
+                _qteAnimRoutine = StartCoroutine(AnimateQTEPrompt(text));
             }
-            if (QTE_TextComponent) QTE_TextComponent.text = text;
+            else
+            {
+                // 如果动画已经跑完（比如红白 EMP 闪烁），直接更新文本但不重置打字机
+                QTE_TextComponent.text = text;
+            }
+
+            // 【核心】：UI 位置的动态缓动系统
+            RectTransform rt = QTE_PromptTextUI.GetComponent<RectTransform>();
+            if (rt != null)
+            {
+                if (style == 1) // 样式1：第三阶段底部沉浸式 HUD
+                {
+                    rt.anchoredPosition = Vector2.Lerp(rt.anchoredPosition, new Vector2(0, -320f), Time.deltaTime * 15f);
+                }
+                else if (style == 2 && target != null && Camera.main != null) // 样式2：第二阶段 3D 悬浮跟随
+                {
+                    Renderer r = target.GetComponentInChildren<Renderer>();
+                    Vector3 centerPos = r != null ? r.bounds.center : target.position;
+                    // 悬浮在柱子中心略偏上的位置
+                    Vector3 screenPos = Camera.main.WorldToScreenPoint(centerPos + Vector3.up * 0.8f);
+
+                    if (screenPos.z > 0) // 在视野前方才显示
+                    {
+                        rt.position = Vector3.Lerp(rt.position, screenPos, Time.deltaTime * 25f);
+                    }
+                    else
+                    {
+                        rt.anchoredPosition = new Vector2(10000, 10000); // 在背后则丢到屏幕外
+                    }
+                }
+                else // 默认：屏幕居中
+                {
+                    rt.anchoredPosition = Vector2.Lerp(rt.anchoredPosition, Vector2.zero, Time.deltaTime * 15f);
+                }
+            }
         }
 
-        private void HideQTEPrompt() => QTE_PromptTextUI?.SetActive(false);
+        // 【新增】：科幻打字机 + 淡入特效
+        private IEnumerator AnimateQTEPrompt(string targetText)
+        {
+            CanvasGroup cg = QTE_PromptTextUI.GetComponent<CanvasGroup>();
+            if (cg == null) cg = QTE_PromptTextUI.AddComponent<CanvasGroup>();
 
-        // ==========================================
-        // 【UI 缩放动画】：仅保留唯一的一份！
-        // ==========================================
+            QTE_TextComponent.text = targetText;
+            QTE_TextComponent.ForceMeshUpdate(); // 强制刷新网格以获取正确字数
+            QTE_TextComponent.maxVisibleCharacters = 0;
+            cg.alpha = 0f;
+
+            float t = 0;
+            float duration = 0.25f; // 极速打字，不拖泥带水
+            int totalChars = QTE_TextComponent.textInfo.characterCount;
+
+            while (t < duration)
+            {
+                t += Time.unscaledDeltaTime;
+                float progress = t / duration;
+
+                cg.alpha = Mathf.Lerp(0f, 1f, progress * 2f); // 前半段直接淡入完成
+
+                int visibleCount = Mathf.FloorToInt(progress * totalChars);
+                QTE_TextComponent.maxVisibleCharacters = visibleCount;
+
+                yield return null;
+            }
+
+            cg.alpha = 1f;
+            QTE_TextComponent.maxVisibleCharacters = 99999;
+        }
+
+        private void HideQTEPrompt()
+        {
+            if (QTE_PromptTextUI != null && QTE_PromptTextUI.activeSelf && !_isHidingQTE)
+            {
+                if (_qteAnimRoutine != null) StopCoroutine(_qteAnimRoutine);
+                _qteAnimRoutine = StartCoroutine(HideQTEPromptRoutine());
+            }
+        }
+
+        // 【新增】：平滑淡出隐藏，摆脱“突然消失”的突兀感
+        private IEnumerator HideQTEPromptRoutine()
+        {
+            _isHidingQTE = true;
+            CanvasGroup cg = QTE_PromptTextUI.GetComponent<CanvasGroup>();
+            if (cg == null) cg = QTE_PromptTextUI.AddComponent<CanvasGroup>();
+
+            float startAlpha = cg.alpha;
+            float t = 0;
+            float duration = 0.15f;
+
+            while (t < duration)
+            {
+                t += Time.unscaledDeltaTime;
+                cg.alpha = Mathf.Lerp(startAlpha, 0f, t / duration);
+                yield return null;
+            }
+
+            QTE_PromptTextUI.SetActive(false);
+            _lastPromptId = "";
+            _isHidingQTE = false;
+        }
         private void ApplyUIPunch(float gaugePercent)
         {
             float punchMultiplier = Mathf.Lerp(1.1f, 1.6f, gaugePercent);
