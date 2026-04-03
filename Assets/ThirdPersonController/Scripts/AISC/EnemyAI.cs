@@ -1,4 +1,4 @@
-using System.Collections;
+ï»¿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
@@ -16,11 +16,11 @@ namespace TheGlitch
             Frozen,
             Rebel,
             Dead,
-            Catching // ¡¾ĞÂÔö¡¿£ºÕıÔÚ´¦¾ö/×¥²¶Íæ¼ÒÖĞ
-        }
+            Catching // ã€æ–°å¢ã€‘ï¼šæ­£åœ¨å¤„å†³/æŠ“æ•ç©å®¶ä¸­
+Â  Â  Â  Â  }
         [Header("Animation")]
-        public Animator anim; // ¶¯»­¿ØÖÆÆ÷
-        [Header("AI Vision")]
+        public Animator anim; // åŠ¨ç”»æ§åˆ¶å™¨
+Â  Â  Â  Â  [Header("AI Vision")]
         public Transform Player;
         public Transform[] PatrolPoints;
         public float PatrolSpeed = 2f;
@@ -30,28 +30,29 @@ namespace TheGlitch
         public float LoseSightTime = 2f;
         public bool EnablePatrol = false;
 
-        // ¡¾ĞÂÔö¡¿ÊÓÏßÕÚµ²ÕÚÕÖ£¬ÉèÖÃÄÄĞ©²ã¼¶Ëã×÷Ç½±Ú£¨Îñ±ØÔÚ±à¼­Æ÷ÀïÅäÖÃ£¬²»Òª¹´Ñ¡ Player£©
-        public LayerMask ObstacleMask = ~0;
-        // ¡¾ĞÂÔö¡¿ÑÛ¾¦µÄ¸ß¶È£¬·ÀÖ¹ÉäÏßÌù×ÅµØ°å·¢Éäµ¼ÖÂÎóÅĞ
-        public float EyeHeight = 1.5f;
+Â  Â  Â  Â  // ã€æ–°å¢ã€‘è§†çº¿é®æŒ¡é®ç½©ï¼Œè®¾ç½®å“ªäº›å±‚çº§ç®—ä½œå¢™å£ï¼ˆåŠ¡å¿…åœ¨ç¼–è¾‘å™¨é‡Œé…ç½®ï¼Œä¸è¦å‹¾é€‰ Playerï¼‰
+Â  Â  Â  Â  public LayerMask ObstacleMask = ~0;
+Â  Â  Â  Â  // ã€æ–°å¢ã€‘çœ¼ç›çš„é«˜åº¦ï¼Œé˜²æ­¢å°„çº¿è´´ç€åœ°æ¿å‘å°„å¯¼è‡´è¯¯åˆ¤
+Â  Â  Â  Â  public float EyeHeight = 1.5f;
 
-        [Header("Catch Player (×¥²¶»úÖÆ)")]
-        // ¡¾ĞÂÔö¡¿×¥²¶¾àÀë£¬Ğ¡ÓÚÕâ¸ö¾àÀëËã×¥µ½
-        public float CatchDistance = 1.5f;
-        // ¡¾ĞÂÔö¡¿Íæ¼Ò±»×¥ºóÖØÉúµÄ³öÉúµã
-        public Transform PlayerSpawnPoint;
+        [Header("Catch Player (æŠ“æ•æœºåˆ¶)")]
+Â  Â  Â  Â  // ã€æ–°å¢ã€‘æŠ“æ•è·ç¦»ï¼Œå°äºè¿™ä¸ªè·ç¦»ç®—æŠ“åˆ°
+Â  Â  Â  Â  public float CatchDistance = 1.5f;
+Â  Â  Â  Â  // ã€æ–°å¢ã€‘ç©å®¶è¢«æŠ“åé‡ç”Ÿçš„å‡ºç”Ÿç‚¹
+Â  Â  Â  Â  public Transform PlayerSpawnPoint;
 
         [Header("Hack Timers")]
         public float StunDuration = 2.0f;
         public float FreezeDuration = 5.0f;
         public float RebelDuration = 6.0f;
 
-        [Header("Overload (±¬Õ¨)")]
+        [Header("Overload (çˆ†ç‚¸)")]
         public float OverloadChargeTime = 1.0f;
         public float ExplosionRadius = 3.0f;
 
-        // ===== IHackable =====
-        public string DisplayName => "Guard";
+Â  Â  Â  Â  // ===== IHackable =====
+Â  Â  Â  Â  public string DisplayName => "Guard";
+        public State CurrentState => _state;
         public Transform WorldTransform => transform;
         private bool _scanTriggered;
 
@@ -67,8 +68,8 @@ namespace TheGlitch
             _agent.updateRotation = true;
             _agent.updateUpAxis = true;
 
-            // ¡¾ĞÂÔö¡¿£º×Ô¶¯È¥×ÓÎïÌåÉíÉÏÕÒ Animator ×é¼ş
-            anim = GetComponentInChildren<Animator>();
+Â  Â  Â  Â  Â  Â  // ã€æ–°å¢ã€‘ï¼šè‡ªåŠ¨å»å­ç‰©ä½“èº«ä¸Šæ‰¾ Animator ç»„ä»¶
+Â  Â  Â  Â  Â  Â  anim = GetComponentInChildren<Animator>();
 
             ApplyMoveTuning(PatrolSpeed);
         }
@@ -86,25 +87,25 @@ namespace TheGlitch
         {
             if (_state == State.Dead)
             {
-                if (anim != null) anim.speed = 0f; // Èç¹ûËÀÁËÃ»ËÀÍö¶¯»­£¬Ò²¿ÉÒÔÖ±½Ó¶¨¸ñ
-                return;
+                if (anim != null) anim.speed = 0f; // å¦‚æœæ­»äº†æ²¡æ­»äº¡åŠ¨ç”»ï¼Œä¹Ÿå¯ä»¥ç›´æ¥å®šæ ¼
+Â  Â  Â  Â  Â  Â  Â  Â  return;
             }
 
-            // ¡¾ĞÂÔö¡¿£º¸ù¾İ×´Ì¬¿ØÖÆ¶¯»­µÄ²¥·ÅËÙ¶È£¨¶¨¸ñ¹¦ÄÜ£©
-            if (anim != null)
+Â  Â  Â  Â  Â  Â  // ã€æ–°å¢ã€‘ï¼šæ ¹æ®çŠ¶æ€æ§åˆ¶åŠ¨ç”»çš„æ’­æ”¾é€Ÿåº¦ï¼ˆå®šæ ¼åŠŸèƒ½ï¼‰
+Â  Â  Â  Â  Â  Â  if (anim != null)
             {
                 if (_state == State.Stunned || _state == State.Frozen)
                 {
-                    anim.speed = 0f; // ËÙ¶ÈÎª0£¬Ë²¼ä¶¨¸ñµ±Ç°¶¯×÷£¡
-                }
+                    anim.speed = 0f; // é€Ÿåº¦ä¸º0ï¼Œç¬é—´å®šæ ¼å½“å‰åŠ¨ä½œï¼
+Â  Â  Â  Â  Â  Â  Â  Â  }
                 else
                 {
-                    anim.speed = 1f; // »Ö¸´Õı³£²¥·Å
-                }
+                    anim.speed = 1f; // æ¢å¤æ­£å¸¸æ’­æ”¾
+Â  Â  Â  Â  Â  Â  Â  Â  }
             }
 
-            // Ö®Ç°¼ÓµÄ´«µİÒÆ¶¯ËÙ¶ÈµÄ´úÂë
-            if (anim != null && _agent != null)
+Â  Â  Â  Â  Â  Â  // ä¹‹å‰åŠ çš„ä¼ é€’ç§»åŠ¨é€Ÿåº¦çš„ä»£ç 
+Â  Â  Â  Â  Â  Â  if (anim != null && _agent != null)
             {
                 float targetSpeed = _agent.desiredVelocity.magnitude;
                 float currentAnimSpeed = anim.GetFloat("Speed");
@@ -137,9 +138,9 @@ namespace TheGlitch
             }
         }
 
-        // ================== »ù´¡ AI ==================
+Â  Â  Â  Â  // ================== åŸºç¡€ AI ==================
 
-        private void TickPatrol()
+Â  Â  Â  Â  private void TickPatrol()
         {
             if (!EnablePatrol) { StopAgent(); return; }
             if (PatrolPoints == null || PatrolPoints.Length == 0) { StopAgent(); return; }
@@ -163,8 +164,8 @@ namespace TheGlitch
                 return;
             }
 
-            // ¡¾ĞÂÔö¡¿×¥²¶¾àÀë¼ì²â
-            float distToPlayer = Vector3.Distance(transform.position, Player.position);
+Â  Â  Â  Â  Â  Â  // ã€æ–°å¢ã€‘æŠ“æ•è·ç¦»æ£€æµ‹
+Â  Â  Â  Â  Â  Â  float distToPlayer = Vector3.Distance(transform.position, Player.position);
             if (distToPlayer <= CatchDistance)
             {
                 CatchPlayer();
@@ -180,40 +181,40 @@ namespace TheGlitch
             }
         }
 
-        // ¡¾ĞÂÔö¡¿×¥µ½Íæ¼ÒºóµÄ´¦ÀíÂß¼­
-        // ¡¾ĞŞ¸Äºó¡¿µçÓ°¼¶×¥²¶Âß¼­
-        private void CatchPlayer()
+Â  Â  Â  Â  // ã€æ–°å¢ã€‘æŠ“åˆ°ç©å®¶åçš„å¤„ç†é€»è¾‘
+Â  Â  Â  Â  // ã€ä¿®æ”¹åã€‘ç”µå½±çº§æŠ“æ•é€»è¾‘
+Â  Â  Â  Â  private void CatchPlayer()
         {
-            // ·ÀÖ¹Á¬Ğø´¥·¢
-            if (_state == State.Catching) return;
+Â  Â  Â  Â  Â  Â  // é˜²æ­¢è¿ç»­è§¦å‘
+Â  Â  Â  Â  Â  Â  if (_state == State.Catching) return;
 
             _state = State.Catching;
-            StopAgent(); // AI Ô­µØÕ¾×¡£¬²»×·ÁË
+            StopAgent(); // AI åŸåœ°ç«™ä½ï¼Œä¸è¿½äº†
 
-            Debug.Log("AI ×¥µ½ÁËÍæ¼Ò£¡¿ªÊ¼ºÚÆÁ¹ı¶É...");
+Â  Â  Â  Â  Â  Â  Debug.Log("AI æŠ“åˆ°äº†ç©å®¶ï¼å¼€å§‹é»‘å±è¿‡æ¸¡...");
 
-            // ºô½ĞÈ«¾ÖºÚÆÁ¹ÜÀíÆ÷
-            if (ScreenFader.Instance != null)
+Â  Â  Â  Â  Â  Â  // å‘¼å«å…¨å±€é»‘å±ç®¡ç†å™¨
+Â  Â  Â  Â  Â  Â  if (ScreenFader.Instance != null)
             {
-                // ÔÚÆÁÄ»ÍêÈ«±äºÚµÄÄÇÒ»Ë²¼ä£¬Ö´ĞĞ´«ËÍ
-                ScreenFader.Instance.DoFadeAndAction(() =>
+Â  Â  Â  Â  Â  Â  Â  Â  // åœ¨å±å¹•å®Œå…¨å˜é»‘çš„é‚£ä¸€ç¬é—´ï¼Œæ‰§è¡Œä¼ é€
+Â  Â  Â  Â  Â  Â  Â  Â  ScreenFader.Instance.DoFadeAndAction(() =>
                 {
                     TeleportPlayer();
 
-                    // ´«ÍêÖ®ºó£¬AI ¼ÌĞø»ØÈ¥Ñ²Âß
-                    _state = State.Patrol;
+Â  Â  Â  Â  Â  Â  Â  Â  Â  Â  // ä¼ å®Œä¹‹åï¼ŒAI ç»§ç»­å›å»å·¡é€»
+Â  Â  Â  Â  Â  Â  Â  Â  Â  Â  _state = State.Patrol;
                 });
             }
             else
             {
-                // ·À´ôÉè¼Æ£ºÈç¹ûÃ»ÅäÖÃºÚÆÁ£¬¾ÍÖ±½ÓÓ²´«
-                TeleportPlayer();
+Â  Â  Â  Â  Â  Â  Â  Â  // é˜²å‘†è®¾è®¡ï¼šå¦‚æœæ²¡é…ç½®é»‘å±ï¼Œå°±ç›´æ¥ç¡¬ä¼ 
+Â  Â  Â  Â  Â  Â  Â  Â  TeleportPlayer();
                 _state = State.Patrol;
             }
         }
 
-        // °ÑÊµ¼ÊµÄ´«ËÍ´úÂëµ¥¶ÀÌá³öÀ´
-        private void TeleportPlayer()
+Â  Â  Â  Â  // æŠŠå®é™…çš„ä¼ é€ä»£ç å•ç‹¬æå‡ºæ¥
+Â  Â  Â  Â  private void TeleportPlayer()
         {
             if (PlayerSpawnPoint != null && Player != null)
             {
@@ -278,15 +279,15 @@ namespace TheGlitch
             float angle = Vector3.Angle(fwd, toPlayer);
             if (angle <= ViewAngle * 0.5f)
             {
-                // ¡¾ºËĞÄĞŞ¸´¡¿£ºÔö¼ÓÉäÏß¼ì²â£¬·ÀÖ¹Í¸ÊÓÇ½±Ú
-                // Ì§¸ß·¢Éäµãµ½ĞØ²¿/ÑÛ¾¦Î»ÖÃ£¬±ÜÃâÌùµØÉäÏß×²µ½Ğ¡Ê¯¿é
-                Vector3 eyePosition = transform.position + Vector3.up * EyeHeight;
+Â  Â  Â  Â  Â  Â  Â  Â  // ã€æ ¸å¿ƒä¿®å¤ã€‘ï¼šå¢åŠ å°„çº¿æ£€æµ‹ï¼Œé˜²æ­¢é€è§†å¢™å£
+Â  Â  Â  Â  Â  Â  Â  Â  // æŠ¬é«˜å‘å°„ç‚¹åˆ°èƒ¸éƒ¨/çœ¼ç›ä½ç½®ï¼Œé¿å…è´´åœ°å°„çº¿æ’åˆ°å°çŸ³å—
+Â  Â  Â  Â  Â  Â  Â  Â  Vector3 eyePosition = transform.position + Vector3.up * EyeHeight;
                 Vector3 targetPosition = Player.position + Vector3.up * EyeHeight;
                 Vector3 dirToTarget = (targetPosition - eyePosition).normalized;
                 float distToTarget = Vector3.Distance(eyePosition, targetPosition);
 
-                // ·¢ÉäÉäÏß¼ì²âÇ½±Ú¡£Èç¹ûÃ»ÓĞ×²µ½ ObstacleMask Éè¶¨µÄÇ½±Ú²ã£¬²ÅËãÕæÕı¿´µ½
-                if (!Physics.Raycast(eyePosition, dirToTarget, distToTarget, ObstacleMask))
+Â  Â  Â  Â  Â  Â  Â  Â  // å‘å°„å°„çº¿æ£€æµ‹å¢™å£ã€‚å¦‚æœæ²¡æœ‰æ’åˆ° ObstacleMask è®¾å®šçš„å¢™å£å±‚ï¼Œæ‰ç®—çœŸæ­£çœ‹åˆ°
+Â  Â  Â  Â  Â  Â  Â  Â  if (!Physics.Raycast(eyePosition, dirToTarget, distToTarget, ObstacleMask))
                 {
                     _state = State.Chase;
                     _lastSeePlayerTime = Time.time;
@@ -294,9 +295,9 @@ namespace TheGlitch
             }
         }
 
-        // ... [ÕâÏÂ·½±£ÁôÄãÔ­À´µÄ´úÂë£ºApplyMoveTuning, StopAgent, SetDestinationSafe, FindNearestEnemy, ÒÔ¼° IHackable Ïà¹ØÊµÏÖ] ...
+Â  Â  Â  Â  // ... [è¿™ä¸‹æ–¹ä¿ç•™ä½ åŸæ¥çš„ä»£ç ï¼šApplyMoveTuning, StopAgent, SetDestinationSafe, FindNearestEnemy, ä»¥åŠ IHackable ç›¸å…³å®ç°] ...
 
-        private void ApplyMoveTuning(float speed)
+Â  Â  Â  Â  private void ApplyMoveTuning(float speed)
         {
             if (_agent == null) return;
             _agent.speed = speed;
@@ -349,9 +350,9 @@ namespace TheGlitch
             return best;
         }
 
-        // ================== IHackable£¨É¨ÃèÓÃ£© ==================
+Â  Â  Â  Â  // ================== IHackableï¼ˆæ‰«æç”¨ï¼‰ ==================
 
-        public void ResetScanFlag() => _scanTriggered = false;
+Â  Â  Â  Â  public void ResetScanFlag() => _scanTriggered = false;
 
         public void OnScannedOnce()
         {
@@ -368,9 +369,9 @@ namespace TheGlitch
             Material mat = rend.material;
 
             Color baseColor =
-                mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") :
-                mat.HasProperty("_Color") ? mat.GetColor("_Color") :
-                Color.white;
+              mat.HasProperty("_BaseColor") ? mat.GetColor("_BaseColor") :
+              mat.HasProperty("_Color") ? mat.GetColor("_Color") :
+              Color.white;
 
             for (int i = 0; i < 3; i++)
             {
@@ -393,17 +394,17 @@ namespace TheGlitch
         public List<HackField> GetFields()
         {
             return new List<HackField>
-            {
-                new HackField("state","Enemy.State",_state.ToString(), new[] { "Patrol", "Chase", "Stunned", "Frozen", "Rebel", "Dead" }),
-                new HackField("alert","Enemy.Alert", _state == State.Chase ? "HIGH" : "LOW", new[] { "LOW", "HIGH" })
-            };
+      {
+        new HackField("state","Enemy.State",_state.ToString(), new[] { "Patrol", "Chase", "Stunned", "Frozen", "Rebel", "Dead" }),
+        new HackField("alert","Enemy.Alert", _state == State.Chase ? "HIGH" : "LOW", new[] { "LOW", "HIGH" })
+      };
         }
 
         public void Apply(List<HackField> fields) { }
 
-        // ================== IQuickHackable£¨ÂÖÅÌ£© ==================
+Â  Â  Â  Â  // ================== IQuickHackableï¼ˆè½®ç›˜ï¼‰ ==================
 
-        public void GetQuickHacks(out QuickHackOption up, out QuickHackOption right, out QuickHackOption down, out QuickHackOption left)
+Â  Â  Â  Â  public void GetQuickHacks(out QuickHackOption up, out QuickHackOption right, out QuickHackOption down, out QuickHackOption left)
         {
             up = new QuickHackOption
             {

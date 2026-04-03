@@ -38,7 +38,7 @@ namespace TheGlitch
         // ====== 出生 FX ======
         [Header("Spawn FX")]
         [Tooltip("幽灵生成时淡入+抖动的时长")]
-        public float SpawnDuration = 0.3f;   // 你说 0.3s 闪现
+        public float SpawnDuration = 0.3f;
 
         [Tooltip("生成时的 scale 抖动强度")]
         public float SpawnScaleJitter = 0.04f;
@@ -53,13 +53,11 @@ namespace TheGlitch
         [Tooltip("溶解时整体轻微 scale 抖动强度")]
         public float DissolveScaleJitter = 0.05f;
 
-        // 上半身：SkinnedMeshRenderer
         private SkinnedMeshRenderer[] _skinnedRenderers;
-        // 下半身 / 其它：MeshRenderer
         private MeshRenderer[] _meshRenderers;
         private TrailRenderer[] _trails;
         private Vector3 _origScale;
-        private bool _isEnding;   // 已经进入结束动画，不再更新轨迹
+        private bool _isEnding;
 
         [Header("Voxel Death FX")]
         [Tooltip("小方块 Prefab，必须挂有 VoxelShard 脚本 + Rigidbody")]
@@ -85,18 +83,13 @@ namespace TheGlitch
         [Tooltip("轨迹线整体抬高一点，避免扎进地板")]
         public float PathHeightOffset = 0.08f;
 
-        // 记录 PathLine 原始渐变，方便淡入淡出
         private Gradient _pathLineBaseGradient;
         private bool _hasPathGradient;
 
-
         private void Awake()
         {
-            // 找到所有 skinned mesh（身体、衣服）
             _skinnedRenderers = GetComponentsInChildren<SkinnedMeshRenderer>();
-            // 找到所有普通 MeshRenderer（靴子、配件、胶囊等）
             _meshRenderers = GetComponentsInChildren<MeshRenderer>();
-            // 找到所有尾巴
             _trails = GetComponentsInChildren<TrailRenderer>();
 
             _origScale = transform.localScale;
@@ -105,14 +98,9 @@ namespace TheGlitch
             foreach (var col in GetComponentsInChildren<Collider>())
                 col.enabled = false;
 
-            // 一出生就先做“现形”特效（路径不动，只在第 0 帧位置）
             StartCoroutine(SpawnAppear());
         }
 
-        /// <summary>
-        /// 外部由 PlayerEchoRecorder 调用：
-        /// 传入轨迹帧 + 采样间隔 + 按 R 那一刻的 LastHack 记录
-        /// </summary>
         public void SetupFrames(List<GhostFrame> frames, float interval, PlayerEchoRecorder.LastHackRecord lastHack)
         {
             _frames = frames;
@@ -146,13 +134,12 @@ namespace TheGlitch
                     Vector3 p = _frames[i].Pos + Vector3.up * PathHeightOffset;
                     PathLine.SetPosition(i, p);
                 }
-                // ★ 影子出现时：屏幕噪点冲击一下（0.3s）
+
                 if (WorldFXController.Instance != null)
                 {
                     WorldFXController.Instance.PlayNoiseKick(0.3f, 0.7f);
                 }
 
-                // 记录原始渐变
                 _pathLineBaseGradient = PathLine.colorGradient;
                 _hasPathGradient = true;
 
@@ -171,22 +158,16 @@ namespace TheGlitch
             }
         }
 
-
         private void Update()
         {
-            // 出生动画没结束，不推进轨迹（只原地闪现）
             if (!_spawnDone) return;
-
-            // 正在做结束溶解动画，就不再推进轨迹
             if (_isEnding) return;
-
             if (_frames == null || _frames.Count == 0) return;
 
             _timer += Time.deltaTime;
             if (_timer < _interval) return;
             _timer = 0f;
 
-            // 确保索引安全
             if (_index < 0 || _index >= _frames.Count)
             {
                 if (DestroyOnEnd && !_isEnding)
@@ -205,23 +186,21 @@ namespace TheGlitch
             // 复刻 V：静默扫描
             if (f.PressV)
             {
-                if (Debug.isDebugBuild)
-                    Debug.Log($"[Ghost] Frame {_index} PressV -> Scan");
                 GhostScanOnce();
             }
 
-            // 复刻 E：在这个时刻，对记录好的目标/选项执行一次 hack
-            if (f.PressE)
+            // ★ 核心修复：在这个绝对确定的时刻，执行黑入！
+            if (f.ExecuteHack)
             {
                 if (Debug.isDebugBuild)
-                    Debug.Log($"[Ghost] Frame {_index} PressE -> AutoHack");
+                    Debug.Log($"[Ghost] Frame {_index} ExecuteHack -> AutoHack");
+
                 GhostAutoHack();
             }
 
             _index++;
 
-
-            // 到最后一帧，启动结束动画（溶解 + voxel）
+            // 到最后一帧，启动结束动画
             if (_index >= _frames.Count && DestroyOnEnd)
             {
                 if (!_isEnding)
@@ -231,14 +210,9 @@ namespace TheGlitch
             }
         }
 
-        // =========================================================
-        // 出生：由透明 → 实体，带一点 scale 抖动 + PathLine 淡入
-        // =========================================================
         private IEnumerator SpawnAppear()
         {
             float t = 0f;
-
-            // 收集所有材质 + 原始颜色
             var mats = new List<Material>();
             var baseColors = new List<Color>();
 
@@ -270,7 +244,6 @@ namespace TheGlitch
                 baseColors.Add(c);
             }
 
-            // 初始：完全透明、略微缩小
             for (int i = 0; i < mats.Count; i++)
             {
                 var m = mats[i];
@@ -292,7 +265,6 @@ namespace TheGlitch
                 t += Time.deltaTime;
                 float k = Mathf.Clamp01(t / Mathf.Max(0.0001f, SpawnDuration));
 
-                // 1）角色透明度 0 → 1
                 for (int i = 0; i < mats.Count; i++)
                 {
                     var m = mats[i];
@@ -308,7 +280,6 @@ namespace TheGlitch
                         m.SetColor("_Color", nc);
                 }
 
-                // 2）PathLine 同步淡入
                 if (_hasPathGradient && PathLine != null)
                 {
                     var baseG = _pathLineBaseGradient;
@@ -327,7 +298,6 @@ namespace TheGlitch
                     PathLine.colorGradient = g;
                 }
 
-                // 3）轻微 scale 抖动：靠近结束越平稳
                 float jitter = Mathf.Sin(Time.time * 40f) * SpawnScaleJitter * (1f - k);
                 float s = Mathf.Lerp(0.95f, 1f, k) + jitter;
                 transform.localScale = _origScale * s;
@@ -335,7 +305,6 @@ namespace TheGlitch
                 yield return null;
             }
 
-            // 最终对齐：避免数值累积问题
             for (int i = 0; i < mats.Count; i++)
             {
                 var m = mats[i];
@@ -348,52 +317,40 @@ namespace TheGlitch
                     m.SetColor("_Color", bc);
             }
 
-            // PathLine 恢复为原始渐变（完全不透明）
             if (_hasPathGradient && PathLine != null)
             {
                 PathLine.colorGradient = _pathLineBaseGradient;
             }
 
             transform.localScale = _origScale;
-            _spawnDone = true; // ★ 现在才允许 Update 推进轨迹
+            _spawnDone = true;
         }
 
-        /// <summary>
-        /// 开始“结尾”：先停止轨迹更新，再溶解 & voxel 爆散
-        /// </summary>
         private void BeginEndSequence()
         {
             _isEnding = true;
 
-
-            // ★ Ghost 消失：再来一次 glitch
             if (WorldFXController.Instance != null)
                 WorldFXController.Instance.PlayGlitchKick(0.3f, 1.3f, 0.4f);
 
             StartCoroutine(DissolveAndDie());
         }
 
-
-        /// <summary>
-        /// 溶解 + scale 抖动 + PathLine 淡出 + 等尾巴消失 + spawn voxel + 销毁
-        /// </summary>
         private IEnumerator DissolveAndDie()
         {
             float t = 0f;
 
-            // 关掉 trail 的 emitting，让它自然收尾
             foreach (var tr in _trails)
             {
                 if (tr != null) tr.emitting = false;
             }
 
-            // 收集所有 Renderer 的材质和原始颜色（上半身 + 下半身）
             var mats = new List<Material>();
 
             foreach (var r in _skinnedRenderers)
             {
                 if (r == null) continue;
-                mats.AddRange(r.materials);  // materials 会实例化
+                mats.AddRange(r.materials);
             }
 
             foreach (var r in _meshRenderers)
@@ -419,14 +376,12 @@ namespace TheGlitch
                 baseColors.Add(c);
             }
 
-            // 溶解过程
             while (t < DissolveDuration)
             {
                 t += Time.deltaTime;
                 float k = Mathf.Clamp01(t / Mathf.Max(0.0001f, DissolveDuration));
                 float fadeOut = 1f - k;
 
-                // 1) Alpha 从 1 -> 0（角色）
                 for (int i = 0; i < mats.Count; i++)
                 {
                     var m = mats[i];
@@ -442,7 +397,6 @@ namespace TheGlitch
                         m.SetColor("_Color", nc);
                 }
 
-                // 2) PathLine 同步淡出
                 if (_hasPathGradient && PathLine != null)
                 {
                     var baseG = _pathLineBaseGradient;
@@ -461,7 +415,6 @@ namespace TheGlitch
                     PathLine.colorGradient = g;
                 }
 
-                // 3) 轻微 scale 抖动：像“被一点点抽走”
                 float jitter = Mathf.Sin(Time.time * 40f) * DissolveScaleJitter * (1f - k);
                 float s = 1f + jitter;
                 transform.localScale = _origScale * s;
@@ -469,9 +422,6 @@ namespace TheGlitch
                 yield return null;
             }
 
-            // ===== 溶解结束这一帧：立刻把本体 & 轨迹线关掉 =====
-
-            // 关掉所有 renderer（上半身 Skinned + 下半身 Mesh）
             foreach (var r in _skinnedRenderers)
             {
                 if (r != null) r.enabled = false;
@@ -481,26 +431,19 @@ namespace TheGlitch
                 if (r != null) r.enabled = false;
             }
 
-            // 关掉路径线
             if (PathLine != null)
                 PathLine.enabled = false;
 
-            // 关掉尾巴发射（尾巴已有的残影会消失，因为 ghost 等会被 Destroy）
             foreach (var tr in _trails)
             {
                 if (tr != null) tr.emitting = false;
             }
 
-            // 角色完全不可见后，生成 voxel 体素碎片
             SpawnVoxelPieces();
 
-            // 直接销毁 ghost 本体（方块是独立 GameObject，会自己按 VoxelShard 的脚本慢慢消失）
             Destroy(gameObject);
         }
 
-        /// <summary>
-        /// 生成一堆小方块，在角色附近随机位置爆散
-        /// </summary>
         private void SpawnVoxelPieces()
         {
             if (VoxelPrefab == null || VoxelCount <= 0)
@@ -508,7 +451,6 @@ namespace TheGlitch
 
             for (int i = 0; i < VoxelCount; i++)
             {
-                // 在角色局部空间的一个盒子里随机生成
                 Vector3 localOffset = new Vector3(
                     Random.Range(-VoxelSpawnBounds.x, VoxelSpawnBounds.x),
                     Random.Range(0, VoxelSpawnBounds.y),
@@ -520,7 +462,6 @@ namespace TheGlitch
 
                 GameObject piece = Object.Instantiate(VoxelPrefab, spawnPos, rot);
 
-                // 给点爆炸力（从 Ghost 的中心往外）
                 Rigidbody rb = piece.GetComponent<Rigidbody>();
                 if (rb != null)
                 {
@@ -533,9 +474,6 @@ namespace TheGlitch
             }
         }
 
-        /// <summary>
-        /// 影子自己的 Scan：只调 OnScannedOnce，不出 UI、不改时间
-        /// </summary>
         private void GhostScanOnce()
         {
             Collider[] hits = Physics.OverlapSphere(
@@ -550,16 +488,12 @@ namespace TheGlitch
                 var h = c.GetComponentInParent<IHackable>();
                 if (h == null) continue;
 
-                h.OnScannedOnce();   // 每个 h 自己用 _scanTriggered 防重复
+                h.OnScannedOnce();
             }
         }
 
-        /// <summary>
-        /// 影子自己的 Hack：严格复刻按 R 那一刻记录的目标 + 选项
-        /// </summary>
         private void GhostAutoHack()
         {
-            // 没有任何记录：只是不做 hack
             if (_hackTarget == null || string.IsNullOrEmpty(_hackOptionId))
             {
                 if (Debug.isDebugBuild)
@@ -570,7 +504,6 @@ namespace TheGlitch
             IHackable target = _hackTarget;
             string optId = _hackOptionId;
 
-            // 尝试找 IQuickHackable
             IQuickHackable qh = target as IQuickHackable;
             if (qh == null && target.WorldTransform != null)
             {
@@ -584,7 +517,6 @@ namespace TheGlitch
                 return;
             }
 
-            // 拿四个选项并按 Id 匹配
             qh.GetQuickHacks(out var up, out var right, out var down, out var left);
 
             QuickHackOption chosen = null;
@@ -612,4 +544,3 @@ namespace TheGlitch
         }
     }
 }
-

@@ -14,9 +14,9 @@ namespace TheGlitch
         public float FlashDuration = 0.35f;
 
         private bool _wasReady = false;
-
         private float _flashT;
         private Color _flashColor;
+        private Color _originalIconColor;
 
         private void Start()
         {
@@ -25,6 +25,7 @@ namespace TheGlitch
                 _flashColor = ReadyFlash.color;
                 ReadyFlash.gameObject.SetActive(false);
             }
+            if (Icon != null) _originalIconColor = Icon.color;
         }
 
         private void Update()
@@ -32,38 +33,51 @@ namespace TheGlitch
             var rec = PlayerEchoRecorder.Instance;
             if (rec == null) return;
 
-            float remain = rec.CooldownRemain;
-            float max = rec.EchoCooldown;
-            bool ready = remain <= 0f;
+            bool isReady = rec.State == PlayerEchoRecorder.RecorderState.Ready;
 
-            // --- 冷却中 ---
-            if (!ready)
+            // --- 状态 1: 录制中 ---
+            if (rec.State == PlayerEchoRecorder.RecorderState.Recording)
             {
+                float remain = rec.RecordDuration - rec.CurrentRecordTime;
+                float t = Mathf.Clamp01(remain / rec.RecordDuration);
+
+                if (Fill != null) Fill.fillAmount = t;
+                if (TimerText != null) TimerText.text = "REC " + remain.ToString("0.0");
+
+                // 录制时图标变红，营造紧张感
+                if (Icon != null) Icon.color = Color.red;
+            }
+            // --- 状态 2: 冷却中 ---
+            else if (rec.State == PlayerEchoRecorder.RecorderState.Cooldown)
+            {
+                float remain = rec.CooldownRemain;
+                float max = rec.EchoCooldown;
                 float t = Mathf.Clamp01(1f - (remain / max));
+
                 if (Fill != null) Fill.fillAmount = t;
                 if (TimerText != null) TimerText.text = remain.ToString("0.0");
 
                 if (Icon != null)
                 {
-                    Color c = Icon.color;
+                    Color c = _originalIconColor;
                     c.a = 0.4f;
                     Icon.color = c;
                 }
             }
-            // --- 冷却完成（ready == true）---
+            // --- 状态 3: 准备就绪 ---
             else
             {
                 if (Fill != null) Fill.fillAmount = 1f;
-                if (TimerText != null) TimerText.text = "";
+                if (TimerText != null) TimerText.text = "READY";
 
                 if (Icon != null)
                 {
-                    Color c = Icon.color;
+                    Color c = _originalIconColor;
                     c.a = 1f;
                     Icon.color = c;
                 }
 
-                // ? 只在 “刚刚变成 Ready” 的那一帧触发闪光
+                // 刚刚变成 Ready 时闪一下
                 if (!_wasReady && ReadyFlash != null)
                 {
                     _flashT = FlashDuration;
@@ -82,16 +96,10 @@ namespace TheGlitch
                 c.a = t;
                 ReadyFlash.color = c;
 
-                if (_flashT <= 0f)
-                {
-                    ReadyFlash.gameObject.SetActive(false);
-                }
+                if (_flashT <= 0f) ReadyFlash.gameObject.SetActive(false);
             }
 
-            // 最后更新上一帧状态
-            _wasReady = ready;
+            _wasReady = isReady;
         }
-
     }
 }
-

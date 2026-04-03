@@ -36,7 +36,10 @@ namespace TheGlitch
         {
             if (PromptUI) PromptUI.SetActive(false);
 
-            // 【核心修复】：把瞬移目标 (ExitPoint3D) 发送给 EnterSystem，
+            // 【核心修复】：强行关闭触发开关！防止触发器丢失 Exit 事件导致全局按键粘连
+            _canExit = false;
+
+            // 把瞬移目标 (ExitPoint3D) 发送给 EnterSystem，
             // 剩下的瞬移、溶解重组动画全由 EnterSystem 统筹执行！
             if (EnterSystem != null)
             {

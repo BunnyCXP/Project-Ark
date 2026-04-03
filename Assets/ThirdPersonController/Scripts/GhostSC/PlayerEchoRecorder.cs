@@ -5,51 +5,51 @@ using UnityEngine.InputSystem;
 
 namespace TheGlitch
 {
-    /// <summary>
-    /// 挂在玩家身上：持续录制最近 N 秒，然后按 R 生成影子回放这些操作
-    /// </summary>
     public class PlayerEchoRecorder : MonoBehaviour
     {
         public static PlayerEchoRecorder Instance { get; private set; }
 
-        [Header("Record Settings")]
-        [Tooltip("录制多长时间的历史（秒）")]
-        public float RecordDuration = 10f;
+        public enum RecorderState
+        {
+            Ready,
+            Recording,
+            Cooldown
+        }
 
+        [Header("状态 (供查看)")]
+        public RecorderState State { get; private set; } = RecorderState.Ready;
+
+        [Header("Record Settings")]
+        [Tooltip("最多录制多长时间（秒）")]
+        public float RecordDuration = 10f;
         [Tooltip("多久采样一帧（秒），越小越精细")]
         public float RecordInterval = 0.05f;
 
         [Header("Ghost")]
-        [Tooltip("用来播放影子的预制体")]
         public GameObject GhostPrefab;
 
         [Header("Echo Cooldown")]
-        [Tooltip("回溯冷却时间（秒），建议跟 RecordDuration 一样")]
-        public float EchoCooldown = 10f;
+        [Tooltip("影子消失后多久可以再次录制")]
+        public float EchoCooldown = 8f;
 
-        // 剩余冷却时间（<=0 表示已经冷却好）
         public float CooldownRemain { get; private set; }
+        public float CurrentRecordTime { get; private set; }
 
-        // 给 UI 用：是否可以再次放影子
-        public bool EchoReady => CooldownRemain <= 0f;
+        public bool EchoReady => State == RecorderState.Ready;
 
         [Serializable]
         public class LastHackRecord
         {
             public IHackable Target;
             public string OptionId;
-            public float Time;   // 这个 hack 发生的世界时间
+            public float Time;
         }
 
         public LastHackRecord LastHack { get; private set; }
 
         private readonly List<GhostFrame> _frames = new();
         private float _recordTimer;
-
         private GameObject _currentGhost;
-
-        // ★ 按下 R 之后锁定 LastHack，不再更新
-        private bool _lockHackRecord = false;
 
         private void Awake()
         {
@@ -58,43 +58,97 @@ namespace TheGlitch
 
         private void Update()
         {
-            // 1. 冷却计时
-            if (CooldownRemain > 0f)
-                CooldownRemain -= Time.deltaTime;
+            if (Keyboard.current == null) return;
 
-            // 2. 持续录制轨迹 + 按键
-            RecordFrames();
-
-            // 3. 按 R 生成影子（只有冷却好才响应）
-            if (Keyboard.current != null &&
-                Keyboard.current.rKey.wasPressedThisFrame &&
-                EchoReady)
+            switch (State)
             {
-                // 锁定当前这一次的 hack 记录
-                _lockHackRecord = true;
+                case RecorderState.Ready:
+                    // 按 R 开始录制
+                    if (Keyboard.current.rKey.wasPressedThisFrame)
+                    {
+                        StartRecording();
+                    }
+                    break;
 
-                SpawnGhostFromHistory();
-            }
+                case RecorderState.Recording:
+                    CurrentRecordTime += Time.deltaTime;
+                    RecordFrames();
 
-            // 冷却走完后，允许下一轮重新记录 hack
-            if (EchoReady && _lockHackRecord)
-            {
-                // 下一次 hack 又可以更新 LastHack
-                _lockHackRecord = false;
-                // 不清掉 LastHack，这样你可以看到上次 ghost 复刻的是什么
+                    // 时间结束，或者玩家再次按 R 提前打断录制！
+                    if (CurrentRecordTime >= RecordDuration || Keyboard.current.rKey.wasPressedThisFrame)
+                    {
+                        StopRecordingAndSpawnGhost();
+                    }
+                    break;
+
+                case RecorderState.Cooldown:
+                    CooldownRemain -= Time.deltaTime;
+                    if (CooldownRemain <= 0f)
+                    {
+                        State = RecorderState.Ready;
+                    }
+                    break;
             }
         }
 
-        /// <summary>
-        /// 在执行 QuickHack 的时候调用，记录「最后一次」黑入
-        /// </summary>
+        private void StartRecording()
+        {
+            State = RecorderState.Recording;
+            CurrentRecordTime = 0f;
+            _recordTimer = 0f;
+            _frames.Clear();
+            LastHack = null;
+
+            // 录下第一帧
+            RecordSingleFrame();
+
+            // 屏幕给个特效，提示玩家“摄像机开启了”
+            if (WorldFXController.Instance != null)
+                WorldFXController.Instance.PlayNoiseKick(0.2f, 0.5f);
+        }
+
+        private void RecordFrames()
+        {
+            _recordTimer += Time.deltaTime;
+            if (_recordTimer >= RecordInterval)
+            {
+                _recordTimer = 0f;
+                RecordSingleFrame();
+            }
+        }
+
+        private void RecordSingleFrame()
+        {
+            if (Keyboard.current == null) return;
+
+            GhostFrame f = new GhostFrame
+            {
+                Pos = transform.position,
+                Rot = transform.rotation,
+                PressV = Keyboard.current.vKey.isPressed,
+                PressE = Keyboard.current.eKey.isPressed,
+                PressQ = Keyboard.current.qKey.isPressed,
+                ReleaseQ = Keyboard.current.qKey.wasReleasedThisFrame,
+                ExecuteHack = false // 默认没执行
+            };
+            _frames.Add(f);
+        }
+
+        private void StopRecordingAndSpawnGhost()
+        {
+            State = RecorderState.Cooldown;
+            CooldownRemain = EchoCooldown;
+
+            SpawnGhostFromHistory();
+        }
+
+        // 仅在录制期间才允许记录黑客操作
         public void RecordLastHack(IHackable target, QuickHackOption opt)
         {
+            if (State != RecorderState.Recording) return;
+
             if (target == null || opt == null) return;
             if (string.IsNullOrEmpty(opt.Id)) return;
-
-            // ★ 已经锁定的这一轮，不再覆盖（按下 R 之后的 hack 不影响当前 ghost）
-            if (_lockHackRecord) return;
 
             LastHack = new LastHackRecord
             {
@@ -103,94 +157,42 @@ namespace TheGlitch
                 Time = Time.time
             };
 
-            //Debug.Log($"[Recorder] LastHack = {target.DisplayName} / {opt.Id}");
-        }
-
-        /// <summary>
-        /// 每隔 RecordInterval 录一帧：位置 + 朝向 + 是否在这一帧按键
-        /// </summary>
-        private void RecordFrames()
-        {
-            _recordTimer += Time.deltaTime;
-            if (_recordTimer < RecordInterval) return;
-            _recordTimer = 0f;
-
-            if (Keyboard.current == null) return;
-
-            // 用 isPressed 增大录到的概率
-            bool vPressed = Keyboard.current.vKey.isPressed;
-            bool ePressed = Keyboard.current.eKey.isPressed;
-            bool qPressed = Keyboard.current.qKey.isPressed;
-            bool qReleased = Keyboard.current.qKey.wasReleasedThisFrame;
-
-            GhostFrame f = new GhostFrame
+            // ★ 核心修复：精准打标！
+            // 找到录像带的最后一帧，给它盖上“在这里执行黑客操作”的章
+            if (_frames.Count > 0)
             {
-                Pos = transform.position,
-                Rot = transform.rotation,
-
-                PressV = vPressed,
-                PressE = ePressed,
-                PressQ = qPressed,
-                ReleaseQ = qReleased
-            };
-
-            _frames.Add(f);
-
-            int maxFrames = Mathf.CeilToInt(RecordDuration / RecordInterval);
-            if (_frames.Count > maxFrames)
-            {
-                _frames.RemoveAt(0);
+                GhostFrame f = _frames[_frames.Count - 1];
+                f.ExecuteHack = true;
+                _frames[_frames.Count - 1] = f; // 结构体需要重新赋值
             }
         }
 
-        /// <summary>
-        /// 用当前这段历史生成一个影子，让它回放
-        /// </summary>
         private void SpawnGhostFromHistory()
         {
-            // 冷却中就不放影子
-            if (!EchoReady) return;
+            if (GhostPrefab == null || _frames.Count < 2) return;
 
-            if (GhostPrefab == null) return;
-            if (_frames.Count < 2) return;
-
-            // 有旧 ghost 就先干掉
             if (_currentGhost != null)
                 Destroy(_currentGhost);
 
             _currentGhost = Instantiate(GhostPrefab);
-
-            // 起点位置
+            // 影子诞生在录制的起点
             _currentGhost.transform.position = _frames[0].Pos;
             _currentGhost.transform.rotation = _frames[0].Rot;
 
             var playback = _currentGhost.GetComponent<GhostPlayback>();
             if (playback != null)
             {
-                // ★ 在按 R 那一刻，把当前 LastHack 拷贝一份快照
                 LastHackRecord snapshot = null;
                 if (LastHack != null)
                 {
-                    snapshot = new LastHackRecord
-                    {
-                        Target = LastHack.Target,
-                        OptionId = LastHack.OptionId
-                    };
+                    snapshot = new LastHackRecord { Target = LastHack.Target, OptionId = LastHack.OptionId };
                 }
-
-                // 把帧 + 间隔 + 那一刻的 hack 快照 一起塞给影子
+                // 派影子去干活
                 playback.SetupFrames(new List<GhostFrame>(_frames), RecordInterval, snapshot);
             }
 
-
-            // ★ Ghost 出生：强一点的 glitch 撕裂
             if (WorldFXController.Instance != null)
                 WorldFXController.Instance.PlayGlitchKick(0.3f, 1.3f, 0.4f);
-
-            // 进入冷却
-            CooldownRemain = EchoCooldown;
         }
-
     }
 }
-

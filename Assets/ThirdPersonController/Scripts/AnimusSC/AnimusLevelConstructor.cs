@@ -1,6 +1,8 @@
 ﻿using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 using Unity.Cinemachine;
 
 namespace TheGlitch
@@ -13,13 +15,11 @@ namespace TheGlitch
         public GameObject VirtualCamera2;
         public GameObject PlayerVirtualCamera;
 
-        [Header("🎥 电影级微小运镜 (Cinemachine 3.x)")]
+        [Header("🎥 电影级微小运镜")]
         public bool EnableCameraDollyMove = true;
-
         [Space(5)]
         public Transform Cam1DollyTarget;
         [Range(0.1f, 3.0f)] public float Cam1MoveSpeedMultiplier = 1.0f;
-
         [Space(5)]
         public Transform Cam2DollyTarget;
         [Range(0.1f, 3.0f)] public float Cam2MoveSpeedMultiplier = 1.0f;
@@ -27,10 +27,8 @@ namespace TheGlitch
         [Header("🏗️ 空间大小与扫描控制")]
         public Transform BuildOrigin;
         public Transform LevelParent;
-        [Space(5)]
         public bool AutoCalculateSize = true;
         public float ManualMaxRadius = 80f;
-        [Space(5)]
         [Range(5f, 200f)] public float BuildWaveSpeed = 25f;
 
         [Header("🎬 镜头切换时间")]
@@ -50,6 +48,10 @@ namespace TheGlitch
         [Range(0.5f, 10f)] public float FovTwitchAmplitude = 3.0f;
         [Range(0.1f, 0.9f)] public float GlitchFrequency = 0.4f;
 
+        [Header("💻 终端启动代码 & 全息卡片 (Terminal UI)")]
+        public bool ShowBootTerminal = true;
+        public Color TerminalTextColor = new Color(0.4f, 0.8f, 1.0f, 0.8f);
+
         public MonoBehaviour[] PlayerScriptsToFreeze;
 
         private float _maxDistance = 0f;
@@ -58,6 +60,8 @@ namespace TheGlitch
         private bool _isGlitchingLoop = false;
 
         private Image _whiteScreen;
+        private TextMeshProUGUI _terminalText;
+        private TextMeshProUGUI[] _holographicPanelTexts;
         private CinemachineImpulseSource _impulseSource;
         private GameObject _diffusionSphere;
         private CinemachineBrain _cameraBrain;
@@ -71,7 +75,7 @@ namespace TheGlitch
         {
             _impulseSource = GetComponent<CinemachineImpulseSource>();
 
-            SetupWhiteScreenUI();
+            SetupUI();
             InitializeLevelRadius();
             SetupDiffusionSphereVisual();
 
@@ -92,20 +96,66 @@ namespace TheGlitch
             if (VirtualCamera2 != null) { _cam2StartPos = VirtualCamera2.transform.position; _cam2StartRot = VirtualCamera2.transform.rotation; }
         }
 
-        private void SetupWhiteScreenUI()
+        private void SetupUI()
         {
-            GameObject canvasObj = new GameObject("AnimusFlashCanvas");
+            GameObject canvasObj = new GameObject("AnimusIntroCanvas");
             Canvas canvas = canvasObj.AddComponent<Canvas>();
             canvas.renderMode = RenderMode.ScreenSpaceOverlay;
             canvas.sortingOrder = 9999;
 
+            // 1. 白屏遮罩
             GameObject imageObj = new GameObject("WhiteImage");
             imageObj.transform.SetParent(canvasObj.transform, false);
             _whiteScreen = imageObj.AddComponent<Image>();
             _whiteScreen.color = new Color(1, 1, 1, 0);
-
             RectTransform rect = _whiteScreen.rectTransform;
             rect.anchorMin = Vector2.zero; rect.anchorMax = Vector2.one; rect.sizeDelta = Vector2.zero;
+
+            // 2. 终端代码文本
+            GameObject textObj = new GameObject("TerminalText");
+            textObj.transform.SetParent(canvasObj.transform, false);
+            _terminalText = textObj.AddComponent<TextMeshProUGUI>();
+            _terminalText.font = TMP_Settings.defaultFontAsset;
+            _terminalText.fontSize = 20;
+            _terminalText.color = TerminalTextColor;
+            _terminalText.alignment = TextAlignmentOptions.BottomLeft;
+            _terminalText.lineSpacing = -20f;
+
+            RectTransform txtRect = _terminalText.rectTransform;
+            txtRect.sizeDelta = new Vector2(500, 300);
+            txtRect.pivot = new Vector2(0f, 0f);
+            txtRect.anchoredPosition = Vector2.zero;
+            _terminalText.text = "";
+
+            // 3. 全息数据流卡片
+            if (ShowBootTerminal)
+            {
+                SetupHolographicPanels(canvasObj);
+            }
+        }
+
+        private void SetupHolographicPanels(GameObject canvas)
+        {
+            _holographicPanelTexts = new TextMeshProUGUI[1];
+            string panelName = "SYS_MONITOR";
+
+            GameObject panelObj = new GameObject($"HoloPanel_{panelName}");
+            panelObj.transform.SetParent(canvas.transform, false);
+            TextMeshProUGUI txt = panelObj.AddComponent<TextMeshProUGUI>();
+            txt.font = TMP_Settings.defaultFontAsset;
+            txt.fontSize = 18;
+            txt.color = TerminalTextColor;
+            txt.alignment = TextAlignmentOptions.TopLeft;
+            txt.lineSpacing = -15f;
+            txt.text = "";
+
+            RectTransform r = txt.rectTransform;
+            r.sizeDelta = new Vector2(300, 150);
+            r.pivot = new Vector2(0.5f, 0.5f);
+            r.anchoredPosition = Vector2.zero;
+
+            panelObj.AddComponent<CanvasGroup>();
+            _holographicPanelTexts[0] = txt;
         }
 
         private void InitializeLevelRadius()
@@ -157,16 +207,15 @@ namespace TheGlitch
         {
             foreach (var script in PlayerScriptsToFreeze) { if (script != null) script.enabled = false; }
 
-            // ==========================================
-            // 【镜头 1：开场全景】
-            // ==========================================
             _whiteScreen.color = new Color(1, 1, 1, MaxFlashAlpha);
             SwitchToCamera(VirtualCamera1);
 
-            // 【👑 终极连贯优化】：去掉了 yield！在切镜瞬间立刻把运镜丢进后台并行运行！
-            // 把“白屏消散时间”和“等待时间”全加进去，让相机在白光中就开始滑行！
             float totalCam1Time = IntroWhiteFadeDuration + StartBuildDelay + Camera1Duration;
             StartCoroutine(AnimateCameraDollyMove(VirtualCamera1, _cam1StartPos, _cam1StartRot, Cam1DollyTarget, totalCam1Time, Cam1MoveSpeedMultiplier));
+
+            float totalCinematicTime = IntroWhiteFadeDuration + StartBuildDelay + Camera1Duration + (FlashHalfDuration * 2f) + Camera2Duration;
+
+            if (ShowBootTerminal) StartCoroutine(BootTerminalRoutine(totalCinematicTime));
 
             yield return StartCoroutine(FadeWhiteScreen(MaxFlashAlpha, 0f, IntroWhiteFadeDuration));
             yield return new WaitForSeconds(StartBuildDelay);
@@ -177,9 +226,6 @@ namespace TheGlitch
 
             yield return new WaitForSeconds(Camera1Duration);
 
-            // ==========================================
-            // 【转场：故障白屏切镜】
-            // ==========================================
             yield return StartCoroutine(FadeWhiteScreen(0f, MaxFlashAlpha, FlashHalfDuration));
 
             SwitchToCamera(VirtualCamera2);
@@ -188,17 +234,12 @@ namespace TheGlitch
             CyberspaceEnvironment env = FindObjectOfType<CyberspaceEnvironment>();
             if (env != null) env.TriggerDataBurst();
 
-            // 【👑 终极连贯优化】：切镜瞬间立刻启动运镜 2！
             float totalCam2Time = FlashHalfDuration + Camera2Duration;
             StartCoroutine(AnimateCameraDollyMove(VirtualCamera2, _cam2StartPos, _cam2StartRot, Cam2DollyTarget, totalCam2Time, Cam2MoveSpeedMultiplier));
 
             yield return StartCoroutine(FadeWhiteScreen(MaxFlashAlpha, 0f, FlashHalfDuration));
-
             yield return new WaitForSeconds(Camera2Duration);
 
-            // ==========================================
-            // 【结尾：白屏切回玩家】
-            // ==========================================
             yield return StartCoroutine(FadeWhiteScreen(0f, MaxFlashAlpha, FlashHalfDuration));
 
             SwitchToCamera(PlayerVirtualCamera);
@@ -215,18 +256,110 @@ namespace TheGlitch
             foreach (var script in PlayerScriptsToFreeze) { if (script != null) script.enabled = true; }
         }
 
+        private IEnumerator BootTerminalRoutine(float duration)
+        {
+            if (_terminalText == null) yield break;
+
+            string[] logLines = {
+                "INITIALIZING ANIMUS OS v9.42...", "BYPASSING SECURITY... [OK]", "ACCESSING GENETIC MEMORY BLOCK...",
+                "LOADING GEOMETRY... 12%", "LOADING GEOMETRY... 45%", "LOADING GEOMETRY... 89%",
+                "TEXTURE MAPS SYNCHRONIZED.", "PHYSICS ENGINE: ONLINE.", "TIMELINE: INSTABILITY DETECTED.",
+                "COMPENSATING... NEURAL LINK...", "SYNCHRONIZATION COMPLETE."
+            };
+
+            string[] holoLines = {
+                "RECONSTRUCTING...", "DATA_PACKETS: 14502/s", "CRC_CHECK...[OK]", "VECTOR_ARRAY_LOADED",
+                "SYNC_BUFFER...14%", "TEMP_RECOVERY: 4%", "NEURAL_FEEDBACK: 120ms", "BYPASSING...",
+                "RENDER_QUEUE: Busy"
+            };
+
+            string currentText = "";
+            int lineIndex = 0;
+            float t = 0;
+
+            float nextLogTime = 0f;
+            float nextTerminalJumpTime = 0f;
+            float nextPanelUpdate = 0f;
+
+            while (t < duration)
+            {
+                t += Time.deltaTime;
+
+                // 【👑 终极防遮挡】：主终端代码严格锁定在左下角极小范围内偏移
+                if (t >= nextTerminalJumpTime)
+                {
+                    float rx = Random.Range(0.02f, 0.15f); // 绝对靠近左侧边缘
+                    float ry = Random.Range(0.02f, 0.15f); // 绝对靠近下方边缘
+                    _terminalText.rectTransform.anchorMin = new Vector2(rx, ry);
+                    _terminalText.rectTransform.anchorMax = new Vector2(rx, ry);
+                    _terminalText.rectTransform.anchoredPosition = Vector2.zero;
+
+                    nextTerminalJumpTime = t + Random.Range(1.5f, 3.5f);
+                }
+
+                if (lineIndex < logLines.Length && t >= nextLogTime)
+                {
+                    currentText += logLines[lineIndex] + "\n";
+                    string[] split = currentText.Split('\n');
+                    if (split.Length > 6) currentText = string.Join("\n", split, split.Length - 6, 6);
+                    _terminalText.text = currentText;
+                    lineIndex++;
+                    nextLogTime = t + Random.Range(0.3f, 1.0f);
+                }
+
+                // 【👑 终极防遮挡】：全息卡片空心化生成算法，绝不踏入屏幕中央！
+                if (_holographicPanelTexts != null && _holographicPanelTexts.Length > 0)
+                {
+                    if (t >= nextPanelUpdate)
+                    {
+                        var txt = _holographicPanelTexts[0];
+                        txt.text = $"{txt.gameObject.name.Substring(10)}\n------\n" +
+                                   $"STATUS: {holoLines[Random.Range(0, holoLines.Length)]}\n" +
+                                   $"VAL: {Random.Range(1000, 99999)}\n" +
+                                   $"HASH: {Random.Range(100, 999)}";
+
+                        float rx = 0f, ry = 0f;
+
+                        // 50% 概率贴紧左右两边，50% 概率贴紧上下两边
+                        if (Random.value > 0.5f)
+                        {
+                            rx = Random.value > 0.5f ? Random.Range(0.05f, 0.2f) : Random.Range(0.8f, 0.95f); // 最左 or 最右
+                            ry = Random.Range(0.05f, 0.95f); // 上下随机
+                        }
+                        else
+                        {
+                            rx = Random.Range(0.05f, 0.95f); // 左右随机
+                            ry = Random.value > 0.5f ? Random.Range(0.05f, 0.2f) : Random.Range(0.8f, 0.95f); // 最上 or 最下
+                        }
+
+                        txt.rectTransform.anchorMin = new Vector2(rx, ry);
+                        txt.rectTransform.anchorMax = new Vector2(rx, ry);
+                        txt.rectTransform.anchoredPosition = Vector2.zero;
+
+                        txt.GetComponent<CanvasGroup>().alpha = Random.Range(0.5f, 1f);
+                        nextPanelUpdate = t + Random.Range(0.2f, 0.8f);
+                    }
+                }
+                yield return null;
+            }
+
+            _terminalText.color = new Color(1, 1, 1, 0.5f);
+            yield return new WaitForSeconds(0.05f);
+            _terminalText.text = "";
+            if (_holographicPanelTexts != null && _holographicPanelTexts.Length > 0)
+            {
+                _holographicPanelTexts[0].text = "";
+            }
+        }
+
         private IEnumerator AnimateCameraDollyMove(GameObject camObj, Vector3 startPos, Quaternion startRot, Transform targetTrans, float duration, float speedMultiplier)
         {
-            if (!EnableCameraDollyMove || camObj == null || targetTrans == null)
-            {
-                yield break;
-            }
+            if (!EnableCameraDollyMove || camObj == null || targetTrans == null) yield break;
 
             float elapsed = 0f;
             while (elapsed < duration)
             {
                 elapsed += Time.deltaTime;
-
                 float t = Mathf.Clamp01((elapsed / duration) * speedMultiplier);
                 float smoothT = Mathf.SmoothStep(0f, 1f, t);
 
@@ -242,7 +375,6 @@ namespace TheGlitch
             if (_isBuilding && BuildOrigin != null)
             {
                 _currentBuildRadius += BuildWaveSpeed * Time.deltaTime;
-
                 if (_currentBuildRadius > _maxDistance) _currentBuildRadius = _maxDistance;
 
                 if (_diffusionSphere != null)
@@ -297,7 +429,6 @@ namespace TheGlitch
                 if (_currentActiveCamObj != null)
                 {
                     CinemachineCamera cm3Cam = _currentActiveCamObj.GetComponent<CinemachineCamera>();
-
                     if (Random.value < GlitchFrequency)
                     {
                         if (cm3Cam != null)

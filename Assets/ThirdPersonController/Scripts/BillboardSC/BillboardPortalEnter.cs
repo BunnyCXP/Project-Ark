@@ -114,6 +114,10 @@ namespace TheGlitch
         private IEnumerator Enter2DRoutine()
         {
             _isTransitioning = true;
+
+            // 【核心修复】：强行关闭入口触发开关，防止禁用碰撞体时丢失 Exit 事件导致粘连！
+            _canEnter = false;
+
             if (PromptUI) PromptUI.SetActive(false);
 
             // 1. 冻结3D玩家，防止他在溶解时乱跑乱按

@@ -228,12 +228,54 @@ namespace TheGlitch
 
         private void Start()
         {
+            // ==========================================
+            // 👑 1. 先进行所有的“滴血认亲”（跨场景暴力扫描）
+            // ==========================================
+            if (BossHackWheel == null)
+            {
+                BossHackWheel = Object.FindFirstObjectByType<HackWheelUI>(FindObjectsInactive.Include);
+            }
+
+            Transform[] allTransforms = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            foreach (var t in allTransforms)
+            {
+                if (t.gameObject.scene == this.gameObject.scene)
+                {
+                    if (QTE_PromptTextUI == null && t.name == "QTE_PromptTextUI")
+                    {
+                        QTE_PromptTextUI = t.gameObject;
+                        QTE_TextComponent = t.GetComponentInChildren<TextMeshProUGUI>(true);
+                    }
+                    else if (QTE_ProgressBar == null && t.name == "QTE_ProgressBar")
+                    {
+                        QTE_ProgressBar = t.GetComponent<Slider>();
+                        if (QTE_ProgressBar == null) QTE_ProgressBar = t.GetComponentInChildren<Slider>(true);
+                    }
+                    else if (WarningTextUI == null && t.name == "WarningTextUI")
+                    {
+                        WarningTextUI = t.gameObject;
+                    }
+                }
+            }
+
             InitUI();
             CacheWeakPointMaterials();
 
-            if (QTE_PromptTextUI != null) _qteUIPromptOriginalScale = QTE_PromptTextUI.transform.localScale;
-            if (QTE_ProgressBar != null) _qteUIBarOriginalScale = QTE_ProgressBar.transform.localScale;
+            // ==========================================
+            // 👑 2. 致命 Bug 修复：等 UI 全都找到了，再记录 Scale！
+            // 加入兜底保护，绝对不能让它们变成 (0,0,0)
+            // ==========================================
+            if (QTE_PromptTextUI != null)
+                _qteUIPromptOriginalScale = QTE_PromptTextUI.transform.localScale;
+            else
+                _qteUIPromptOriginalScale = Vector3.one;
 
+            if (QTE_ProgressBar != null)
+                _qteUIBarOriginalScale = QTE_ProgressBar.transform.localScale;
+            else
+                _qteUIBarOriginalScale = Vector3.one;
+
+            // --- 下面的代码完全保持不变 ---
             if (Camera.main != null) _mainCameraBrain = Camera.main.GetComponent<CinemachineBrain>();
             if (_mainCameraBrain == null) _mainCameraBrain = Object.FindFirstObjectByType<CinemachineBrain>();
 
@@ -1946,7 +1988,7 @@ namespace TheGlitch
         #endregion
 
         #region Phase 2 Hacking Logic
-     
+
         private void HandleP2Hacking()
         {
             if (_player == null || _pillarStates == null) return;
@@ -1969,8 +2011,11 @@ namespace TheGlitch
 
             if (nearestExposedIndex != -1)
             {
-                // 【调用 Style 2】：悬浮在目标柱子上方！加入了 P2_HACK 作为ID防止重复动画
                 string p2Text = "<size=20><color=#00FFFF> TARGET_LOCKED </color></size>\n<color=#FFFFFF><size=45><b>[ E ]</b></size></color> <color=#00FFFF>OVERRIDE</color>";
+
+                // ==========================================
+                // 👑 完美恢复！调用 Style 2，并将目标柱子的 Transform 传进去！
+                // ==========================================
                 ShowQTEPrompt(p2Text, 2, P2_Pillars[nearestExposedIndex].transform, "P2_HACK");
 
                 if (Keyboard.current != null && Keyboard.current.eKey.wasPressedThisFrame)
@@ -2834,7 +2879,7 @@ namespace TheGlitch
 
                         float distanceToWave = distToPlayer - _currentPulseRadius;
 
-                        if (distanceToWave <= 8.0f && distanceToWave >= 0f)
+                        if (distanceToWave <= 15.0f && distanceToWave >= 0f)
                         {
                             isPulseIncoming = true;
 
@@ -2940,7 +2985,7 @@ namespace TheGlitch
             r.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
             if (PulseWaveMat != null) r.material = PulseWaveMat;
 
-            float duration = 2.5f;
+            float duration = 4f;
             float t = 0;
 
             Vector3 startScale = new Vector3(1f, 1.5f, 1f);
@@ -3049,7 +3094,6 @@ namespace TheGlitch
 
             string currentId = string.IsNullOrEmpty(id) ? text : id;
 
-            // 只有在 ID 改变、或者正在隐藏时，才重新触发打字机动画！
             if (!QTE_PromptTextUI.activeSelf || _lastPromptId != currentId || _isHidingQTE)
             {
                 _isHidingQTE = false;
@@ -3061,7 +3105,6 @@ namespace TheGlitch
             }
             else
             {
-                // 如果动画已经跑完（比如红白 EMP 闪烁），直接更新文本但不重置打字机
                 QTE_TextComponent.text = text;
             }
 
@@ -3069,16 +3112,18 @@ namespace TheGlitch
             RectTransform rt = QTE_PromptTextUI.GetComponent<RectTransform>();
             if (rt != null)
             {
-                if (style == 1) // 样式1：第三阶段底部沉浸式 HUD
+                if (style == 1)
                 {
                     rt.anchoredPosition = Vector2.Lerp(rt.anchoredPosition, new Vector2(0, -320f), Time.deltaTime * 15f);
                 }
-                else if (style == 2 && target != null && Camera.main != null) // 样式2：第二阶段 3D 悬浮跟随
+                else if (style == 2 && target != null && Camera.main != null)
                 {
+                    // 👑 样式2：第二阶段 3D 悬浮跟随
                     Renderer r = target.GetComponentInChildren<Renderer>();
                     Vector3 centerPos = r != null ? r.bounds.center : target.position;
-                    // 悬浮在柱子中心略偏上的位置
-                    Vector3 screenPos = Camera.main.WorldToScreenPoint(centerPos + Vector3.up * 0.8f);
+
+                    // 悬浮在柱子中心略偏上的位置 (加 1.2f 的高度，效果最好)
+                    Vector3 screenPos = Camera.main.WorldToScreenPoint(centerPos + Vector3.up * 1.2f);
 
                     if (screenPos.z > 0) // 在视野前方才显示
                     {
@@ -3086,10 +3131,10 @@ namespace TheGlitch
                     }
                     else
                     {
-                        rt.anchoredPosition = new Vector2(10000, 10000); // 在背后则丢到屏幕外
+                        rt.anchoredPosition = new Vector2(10000, 10000); // 在背后则丢到屏幕外隐藏
                     }
                 }
-                else // 默认：屏幕居中
+                else
                 {
                     rt.anchoredPosition = Vector2.Lerp(rt.anchoredPosition, Vector2.zero, Time.deltaTime * 15f);
                 }
