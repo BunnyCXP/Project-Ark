@@ -96,4 +96,4 @@ namespace TheGlitch
             transform.position = AI.transform.position + Vector3.up * (HeightOffset + bounceOffset);
         }
     }
-}
+} 
